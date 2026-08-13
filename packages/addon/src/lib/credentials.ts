@@ -1,11 +1,18 @@
-import { toBasicSecret } from '@t212/core';
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { CREDENTIALS_SECRET_KEY, DEV_CREDENTIALS } from '../config';
 
 /**
- * Store the key pair in the OS keyring in the exact form the network broker
- * expects for `auth: { type: 'basic' }` — base64 of `API_KEY:API_SECRET`.
+ * Base64 of `API_KEY:API_SECRET` — the exact string Wealthfolio's keyring must
+ * hold for `network.request({ auth: { type: 'basic' } })`. The host emits it
+ * verbatim after `Basic `, so the encoding has to happen on this side.
  */
+export function toBasicSecret(apiKey: string, apiSecret: string): string {
+  const raw = `${apiKey}:${apiSecret}`;
+  // Credentials are ASCII, so btoa is safe. It exists in the sandbox iframe
+  // and in Node 18+.
+  return typeof btoa === 'function' ? btoa(raw) : Buffer.from(raw, 'utf-8').toString('base64');
+}
+
 export async function saveCredentials(
   ctx: AddonContext,
   apiKey: string,

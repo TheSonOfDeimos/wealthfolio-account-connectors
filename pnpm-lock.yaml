@@ -11,6 +11,9 @@ importers:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      t212-sdk:
+        specifier: 0.3.2
+        version: 0.3.2
       tsx:
         specifier: ^4.19.2
         version: 4.23.12
@@ -23,6 +26,9 @@ importers:
       '@t212/core':
         specifier: workspace:*
         version: link:../core
+      t212-sdk:
+        specifier: 0.3.2
+        version: 0.3.2
     devDependencies:
       '@types/react':
         specifier: ^19.2.13
@@ -50,6 +56,10 @@ importers:
         version: 7.3.6(@types/node@22.20.1)(tsx@4.23.12)
 
   packages/core:
+    dependencies:
+      t212-sdk:
+        specifier: 0.3.2
+        version: 0.3.2
     devDependencies:
       '@wealthfolio/addon-sdk':
         specifier: ^3.6.2
@@ -598,6 +608,9 @@ packages:
     resolution: {integrity: sha512-2sJGJTaXIIaR1w4iJSNoN0hnMY7Gpc/n8D4qSCJw8QqFWXf7cuAgnEHxBpweaVcPevC2l3KpjYCx3NypQQgaJg==}
     engines: {node: '>= 0.8', npm: 1.2.8000 || >= 1.4.16}
 
+  deverything@5.8.1:
+    resolution: {integrity: sha512-79rGr+UhtLSe08gZ7YbVl+uSzzoM6YVK5fMnWHe0EeXZNy+9OFiKHrDEYzP0gUjjXcWg7O0tn6PYjlzd+lZRkw==}
+
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
     engines: {node: '>= 0.4'}
@@ -756,6 +769,9 @@ packages:
     engines: {node: '>=4'}
     hasBin: true
 
+  minimist@1.2.8:
+    resolution: {integrity: sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==}
+
   ms@2.0.0:
     resolution: {integrity: sha512-Tpp60P6IUJDTuOq/5Z8cdskzJujfwqfOTkrwIwj7IRISpnkJnT6SyJ4PCPnGMoFjC9ddhal5KVIYtAt97ix05A==}
 
@@ -890,6 +906,10 @@ packages:
   statuses@2.0.2:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
+
+  t212-sdk@0.3.2:
+    resolution: {integrity: sha512-Um6A78cahMMtRISJ206VX2DWhXRjWSJ/qOSw+6tkaTCPiNe0iDGR18ECH73k3gRa0FcOzqUStADOPjv4bCfmWg==}
+    engines: {node: '>=18'}
 
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
@@ -1414,6 +1434,8 @@ snapshots:
 
   destroy@1.2.0: {}
 
+  deverything@5.8.1: {}
+
   dunder-proto@1.0.1:
     dependencies:
       call-bind-apply-helpers: 1.0.2
@@ -1600,6 +1622,8 @@ snapshots:
 
   mime@1.6.0: {}
 
+  minimist@1.2.8: {}
+
   ms@2.0.0: {}
 
   ms@2.1.3: {}
@@ -1762,6 +1786,11 @@ snapshots:
   source-map-js@1.2.1: {}
 
   statuses@2.0.2: {}
+
+  t212-sdk@0.3.2:
+    dependencies:
+      deverything: 5.8.1
+      minimist: 1.2.8
 
   tinyglobby@0.2.17:
     dependencies:

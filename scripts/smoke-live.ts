@@ -1,26 +1,25 @@
 /**
- * Real-credential smoke test — the one thing the mock host cannot prove.
+ * Real-credential smoke test.
  *
- * Run with `pnpm smoke:live` after filling in `.env`. It performs the exact
- * two reads the addon performs, maps the result with the same mapper the addon
- * uses, and prints what would be imported. Nothing is written anywhere:
- * Wealthfolio is not involved, and no Trading 212 order is placed or changed.
+ * Run with `pnpm smoke:live` after filling in `.env`. It performs the same two
+ * reads the addon performs and maps the result with the same mapper, then
+ * prints what would be imported. Nothing is written anywhere: Wealthfolio is
+ * not involved, and no Trading 212 order is placed or changed.
+ *
+ * Out here `t212-sdk` is used exactly as documented — Node has a real `fetch`,
+ * so no broker adapter is needed.
  */
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import {
-  T212_LIVE_BASE_URL,
-  Trading212Client,
-  basicAuthHeader,
-  mapOrdersToActivities,
-} from '../packages/core/src/index';
-import type { HttpTransport } from '../packages/core/src/index';
+import { T212 } from 't212-sdk';
+import type { HistoricalOrder } from 't212-sdk';
+import { mapOrdersToActivities } from '../packages/core/src/index';
 
 const env = loadEnv();
 const apiKey = env.T212_API_KEY;
 const apiSecret = env.T212_API_SECRET;
-const baseUrl = env.T212_BASE_URL || T212_LIVE_BASE_URL;
+const environment = env.T212_ENVIRONMENT === 'demo' ? 'demo' : 'live';
 
 if (!apiKey || !apiSecret) {
   console.error(
@@ -29,44 +28,27 @@ if (!apiKey || !apiSecret) {
   process.exit(1);
 }
 
-/** Node has real `fetch`, so out here the transport is trivial. */
-const transport: HttpTransport = {
-  async request(request) {
-    const response = await fetch(request.url, {
-      method: request.method ?? 'GET',
-      headers: {
-        ...request.headers,
-        Authorization: basicAuthHeader(apiKey, apiSecret),
-      },
-      body: request.body,
-    });
-    return {
-      status: response.status,
-      headers: Object.fromEntries(response.headers.entries()),
-      body: await response.text(),
-    };
-  },
-};
+const client = new T212({ apiKey, apiSecret, environment });
 
-const client = new Trading212Client({ transport, baseUrl });
+console.log(`Trading 212: ${environment}\n`);
 
-console.log(`Trading 212: ${baseUrl}\n`);
-
-const summary = await client.getAccountSummary();
+const summary = await client.account.getSummary();
 console.log('Account summary');
 console.log(`  account       ${summary.id}`);
 console.log(`  free cash     ${summary.cash.availableToTrade} ${summary.currency}`);
 console.log(`  investments   ${summary.investments.currentValue} ${summary.currency}`);
-console.log(`  total value   ${summary.totalValue} ${summary.currency}`);
-console.log(`  rate limit    ${describeRateLimit()}\n`);
+console.log(`  total value   ${summary.totalValue} ${summary.currency}\n`);
 
-const { items, pagesFetched, truncated } = await client.getAllHistoricalOrders({
-  limit: 20,
-  maxPages: 1,
-});
-console.log(`Order history: ${items.length} fills over ${pagesFetched} page(s)${truncated ? ' (more available)' : ''}\n`);
+const entries: HistoricalOrder[] = [];
+let pages = 0;
+for await (const page of client.history.ordersPages()) {
+  entries.push(...page.items);
+  pages += 1;
+  if (pages >= 2) break;
+}
+console.log(`Order history: ${entries.length} entries over ${pages} page(s)\n`);
 
-const mapped = mapOrdersToActivities(items, { accountId: '<wealthfolio-account-id>' });
+const mapped = mapOrdersToActivities(entries, { accountId: '<wealthfolio-account-id>' });
 console.log(`Mapped ${mapped.activities.length} activities, skipped ${mapped.skipped.length}:\n`);
 
 for (const activity of mapped.activities) {
@@ -78,7 +60,7 @@ for (const activity of mapped.activities) {
 }
 
 for (const skip of mapped.skipped) {
-  console.log(`  skipped ${skip.ticker}: ${skip.reason}`);
+  console.log(`  skipped ${skip.ticker ?? 'unknown'}: ${skip.reason}`);
 }
 
 for (const warning of mapped.warnings) {
@@ -86,12 +68,6 @@ for (const warning of mapped.warnings) {
 }
 
 console.log('\nNothing was written. This script only reads.');
-
-function describeRateLimit(): string {
-  const { remaining, limit, period } = client.lastRateLimit;
-  if (remaining === undefined) return 'not reported';
-  return `${remaining}/${limit} left in a ${period}s window`;
-}
 
 /** Minimal .env reader — avoids a dependency for one file. */
 function loadEnv(): Record<string, string> {

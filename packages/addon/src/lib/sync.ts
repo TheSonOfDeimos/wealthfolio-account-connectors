@@ -1,35 +1,32 @@
-import { Trading212Client, mapOrdersToActivities } from '@t212/core';
-import type { SkippedFill, T212AccountSummary } from '@t212/core';
+import { mapOrdersToActivities } from '@t212/core';
+import type { SkippedFill } from '@t212/core';
 import type {
   ActivityImport,
   AddonContext,
   ImportActivitiesResult,
 } from '@wealthfolio/addon-sdk';
-import { SYNC_DEFAULTS, T212_BASE_URL } from '../config';
-import { createNetworkTransport } from './transport';
+import { T212 } from 't212-sdk';
+import type { AccountSummary, HistoricalOrder } from 't212-sdk';
+import { SYNC_DEFAULTS, T212_ENVIRONMENT } from '../config';
+import { createBrokeredFetch } from './brokered-fetch';
 
 /**
  * The whole Trading 212 → Wealthfolio pipeline, with no React in sight.
  *
- * Keeping it here rather than inside a component is what lets the test suite
- * drive the real code path against a fake AddonContext — there is no official
- * mock host, so this separation is how the addon gets verified without a
- * running Wealthfolio.
+ * Trading 212 itself is handled by `t212-sdk`; this module wires it to the
+ * sandbox, maps the result, and drives Wealthfolio's two-phase import.
  */
 
 export interface PreviewOptions {
   accountId: string;
-  pageSize?: number;
   maxPages?: number;
-  /** Set to 0 in tests to skip the rate-limit pacing. */
-  minRequestIntervalMs?: number;
   onProgress?: (message: string) => void;
 }
 
 export interface PreviewResult {
   /** Rows as returned by `checkImport` — validated, with errors filled in. */
   activities: ActivityImport[];
-  /** Fills the mapper deliberately did not convert. */
+  /** Entries the mapper deliberately did not convert. */
   skipped: SkippedFill[];
   /** Mapping observations worth reading before importing. */
   warnings: string[];
@@ -41,8 +38,8 @@ export interface PreviewResult {
 }
 
 /** Read-only sanity check: proves the credentials and the broker both work. */
-export async function fetchAccountSummary(ctx: AddonContext): Promise<T212AccountSummary> {
-  return createClient(ctx).getAccountSummary();
+export async function fetchAccountSummary(ctx: AddonContext): Promise<AccountSummary> {
+  return createClient(ctx).account.getSummary();
 }
 
 /**
@@ -56,19 +53,30 @@ export async function previewImport(
   ctx: AddonContext,
   options: PreviewOptions,
 ): Promise<PreviewResult> {
-  const client = createClient(ctx, options.minRequestIntervalMs);
+  const client = createClient(ctx);
   const progress = options.onProgress ?? (() => {});
+  const maxPages = options.maxPages ?? SYNC_DEFAULTS.maxPages;
 
   progress('Fetching order history from Trading 212…');
-  const { items, pagesFetched, truncated } = await client.getAllHistoricalOrders({
-    limit: options.pageSize ?? SYNC_DEFAULTS.pageSize,
-    maxPages: options.maxPages ?? SYNC_DEFAULTS.maxPages,
-    onPage: (page, pageNumber) =>
-      progress(`Fetched page ${pageNumber} (${page.items.length} fills)…`),
-  });
 
-  progress(`Mapping ${items.length} fills to Wealthfolio activities…`);
-  const mapped = mapOrdersToActivities(items, { accountId: options.accountId });
+  // The SDK's page iterator handles the cursor and paces itself against the
+  // endpoint's rate limit; we only decide how far back to walk.
+  const entries: HistoricalOrder[] = [];
+  let pagesFetched = 0;
+  let truncated = false;
+
+  for await (const page of client.history.ordersPages()) {
+    entries.push(...page.items);
+    pagesFetched += 1;
+    progress(`Fetched page ${pagesFetched} (${page.items.length} entries)…`);
+    if (pagesFetched >= maxPages) {
+      truncated = page.nextPagePath !== null;
+      break;
+    }
+  }
+
+  progress(`Mapping ${entries.length} entries to Wealthfolio activities…`);
+  const mapped = mapOrdersToActivities(entries, { accountId: options.accountId });
 
   if (mapped.activities.length === 0) {
     return {
@@ -111,10 +119,19 @@ export async function commitImport(
   return ctx.api.activities.import(importable);
 }
 
-function createClient(ctx: AddonContext, minRequestIntervalMs?: number): Trading212Client {
-  return new Trading212Client({
-    transport: createNetworkTransport(ctx),
-    baseUrl: T212_BASE_URL,
-    minRequestIntervalMs: minRequestIntervalMs ?? SYNC_DEFAULTS.minRequestIntervalMs,
+/**
+ * Build the Trading 212 client.
+ *
+ * The credentials passed here are placeholders and are never used: the SDK
+ * builds an `Authorization` header from them, and `createBrokeredFetch` drops
+ * it in favour of `auth.secretKey`, which the host resolves from the keyring.
+ * The SDK's constructor rejects empty strings, hence the filler values.
+ */
+function createClient(ctx: AddonContext): T212 {
+  return new T212({
+    apiKey: 'brokered',
+    apiSecret: 'brokered',
+    environment: T212_ENVIRONMENT,
+    fetch: createBrokeredFetch(ctx),
   });
 }

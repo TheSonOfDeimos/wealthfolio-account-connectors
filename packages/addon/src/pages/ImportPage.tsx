@@ -1,5 +1,5 @@
-import type { T212AccountSummary } from '@t212/core';
 import type { Account, AddonContext } from '@wealthfolio/addon-sdk';
+import type { AccountSummary } from 't212-sdk';
 import { useCallback, useEffect, useState } from 'react';
 import { SELECTED_ACCOUNT_STORAGE_KEY } from '../config';
 import { clearCredentials, hasCredentials, saveCredentials } from '../lib/credentials';
@@ -14,7 +14,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
   const [apiSecret, setApiSecret] = useState('');
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountId, setAccountId] = useState('');
-  const [summary, setSummary] = useState<T212AccountSummary | null>(null);
+  const [summary, setSummary] = useState<AccountSummary | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [status, setStatus] = useState('');
@@ -302,9 +302,9 @@ function PreviewPanel({
             {preview.skipped.length} fill{preview.skipped.length === 1 ? '' : 's'} not imported
           </summary>
           <ul className="list-disc pl-5 mt-2 space-y-1 text-muted-foreground">
-            {preview.skipped.map((skip) => (
-              <li key={`${skip.orderId}-${skip.fillId}`}>
-                {skip.ticker}: {skip.reason}
+            {preview.skipped.map((skip, index) => (
+              <li key={`${skip.orderId ?? "?"}-${skip.fillId ?? index}`}>
+                {skip.ticker ?? "unknown"}: {skip.reason}
               </li>
             ))}
           </ul>

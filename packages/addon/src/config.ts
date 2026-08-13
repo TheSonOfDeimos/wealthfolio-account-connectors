@@ -1,5 +1,3 @@
-import { T212_LIVE_BASE_URL } from '@t212/core';
-
 /**
  * ─────────────────────────────────────────────────────────────────────────────
  *  YOUR TRADING 212 CREDENTIALS GO HERE (development convenience only)
@@ -36,11 +34,11 @@ export const DEV_CREDENTIALS = {
  * order. The only thing it writes to is Wealthfolio, and only after you click
  * through the preview.
  *
- * To rehearse against paper money instead, swap this for `T212_DEMO_BASE_URL`
- * AND add `demo.trading212.com` to `network.allowedHosts` in manifest.json —
- * the host broker refuses any host the manifest does not declare.
+ * To rehearse against paper money instead, set this to `'demo'` AND add
+ * `demo.trading212.com` to `network.allowedHosts` in manifest.json — the host
+ * broker refuses any host the manifest does not declare.
  */
-export const T212_BASE_URL = T212_LIVE_BASE_URL;
+export const T212_ENVIRONMENT: 'live' | 'demo' = 'live';
 
 /** Keyring entry holding base64("API_KEY:API_SECRET"). */
 export const CREDENTIALS_SECRET_KEY = 'trading212-basic-auth';
@@ -49,13 +47,13 @@ export const CREDENTIALS_SECRET_KEY = 'trading212-basic-auth';
 export const SELECTED_ACCOUNT_STORAGE_KEY = 'selected-account-id';
 
 /**
- * How much history one sync pulls: 50 fills per page is the API maximum, and
- * `/history/orders` allows 6 requests per minute. Four pages therefore fetch
- * up to 200 fills while staying inside the limit.
+ * How far back one sync walks.
+ *
+ * t212-sdk pages with the API's default size (20 entries) and paces itself
+ * against `/history/orders`' 6-requests-per-minute budget, so 5 pages is one
+ * minute of budget and roughly 100 entries. Raise it to reach further back, at
+ * the cost of a slower sync.
  */
 export const SYNC_DEFAULTS = {
-  pageSize: 50,
-  maxPages: 4,
-  /** Spacing between requests, in ms — keeps the 6/min budget comfortable. */
-  minRequestIntervalMs: 10_000,
+  maxPages: 5,
 };

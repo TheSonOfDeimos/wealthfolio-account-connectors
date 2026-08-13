@@ -9,11 +9,11 @@ the rows you approve. It is deliberately small, but every layer it touches is
 the real one.
 
 ```
-Trading 212  ──►  Trading212Client  ──►  mapOrdersToActivities  ──►  checkImport  ──►  import
- /history/orders    (packages/core)        (packages/core)          (preview)      (write)
-                          ▲
-                          │ host-brokered HTTPS + OS keyring credentials
-                    Wealthfolio addon sandbox (packages/addon)
+Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  checkImport  ──►  import
+ /history/orders   (client)        (packages/core)            (preview)      (write)
+                      ▲
+                      │ brokered fetch: host-attached auth, allowlisted host
+                Wealthfolio addon sandbox (packages/addon)
 ```
 
 ## What it does today
@@ -22,8 +22,9 @@ Trading 212  ──►  Trading212Client  ──►  mapOrdersToActivities  ─�
   secrets API — never in the bundle, never in `localStorage`.
 - Calls `GET /equity/account/summary` and `GET /equity/history/orders` through
   Wealthfolio's network broker (the sandbox blocks direct `fetch`).
-- Follows the API's cursor pagination and paces requests inside the documented
-  6-requests-per-minute budget.
+- Uses [`t212-sdk`](https://github.com/codeledge/t212-sdk) for the API itself —
+  cursor pagination, rate-limit pacing, and typed responses generated from
+  Trading 212's own schema.
 - Maps each `TRADE` fill to a Wealthfolio activity, splitting Trading 212's
   charges into `fee` (commission, FX conversion, FINRA, PTM) and `tax` (stamp
   duty, SDRT, French FTT).
@@ -35,7 +36,7 @@ Trading 212  ──►  Trading212Client  ──►  mapOrdersToActivities  ─�
 
 | Path | What lives there |
 | --- | --- |
-| [packages/core/](packages/core/) | Trading 212 client + activity mapper. No React, no Wealthfolio runtime. |
+| [packages/core/](packages/core/) | The activity mapper and symbol normalisation — the part no Trading 212 library covers. |
 | [packages/addon/](packages/addon/) | The Wealthfolio addon: manifest, sandbox glue, React page. |
 | [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only check against the real Trading 212 API. |
 
@@ -103,11 +104,11 @@ pnpm bundle        # packages/addon/dist/trading212-import-0.1.0.zip
 
 - The addon talks to **live.trading212.com** — your real account. Every call it
   makes is a `GET`; it never places, amends, or cancels an order. To rehearse
-  against paper money, point `T212_BASE_URL` in
-  [packages/addon/src/config.ts](packages/addon/src/config.ts) at
-  `T212_DEMO_BASE_URL` **and** add `demo.trading212.com` to
-  `network.allowedHosts` in [manifest.json](packages/addon/manifest.json) — the
-  broker refuses any host the manifest does not declare.
+  against paper money, set `T212_ENVIRONMENT` in
+  [packages/addon/src/config.ts](packages/addon/src/config.ts) to `'demo'`
+  **and** add `demo.trading212.com` to `network.allowedHosts` in
+  [manifest.json](packages/addon/manifest.json) — the broker refuses any host
+  the manifest does not declare.
 - The only write is into Wealthfolio, behind the preview and an explicit click.
 - Symbol mapping is a heuristic. Trading 212 tickers like `VODl_EQ` carry a
   venue letter with no published rule, so guesses are flagged in the preview
@@ -127,3 +128,22 @@ remembers the last cursor instead of re-reading the same window.
 - [Trading 212 Public API](https://docs.trading212.com/api) (v0, beta)
 - [Wealthfolio addon docs](https://github.com/wealthfolio/wealthfolio/blob/main/docs/addons/addon-getting-started.md)
 - [`@wealthfolio/addon-sdk`](https://www.npmjs.com/package/@wealthfolio/addon-sdk)
+
+## On the `t212-sdk` dependency
+
+The Trading 212 API layer is [`t212-sdk`](https://github.com/codeledge/t212-sdk)
+(MIT), **pinned to an exact version** rather than a caret range, so an upgrade
+is always a deliberate act. It was audited before adoption: no install scripts,
+unminified shipped code, no `eval`/`child_process`/`fs`/DOM access, and the only
+URL literals in the bundle are `live.trading212.com` and `demo.trading212.com`
+— its base URL is not user-configurable. The published tarball matches the
+public source at that commit. Its two declared dependencies are never imported
+by the shipped code.
+
+Its weakness is obscurity, not conduct: ~70 downloads a month, one maintainer,
+and a `v2` sitting unreleased on `main`. Two things bound the risk — the SDK is
+bundled into `dist/addon.js` and pinned by the lockfile, so a later bad version
+cannot reach a built addon; and every request it makes passes through the host's
+`allowedHosts` check, which holds whether or not the library behaves.
+
+Treat any version bump as a re-audit. The diff is small enough to read.
