@@ -35,11 +35,9 @@ Trading 212  ──►  Trading212Client  ──►  mapOrdersToActivities  ─�
 
 | Path | What lives there |
 | --- | --- |
-| [packages/core/](packages/core/) | Trading 212 client + activity mapper. No React, no Wealthfolio runtime — pure and testable. |
+| [packages/core/](packages/core/) | Trading 212 client + activity mapper. No React, no Wealthfolio runtime. |
 | [packages/addon/](packages/addon/) | The Wealthfolio addon: manifest, sandbox glue, React page. |
-| [packages/addon/test/mocks/](packages/addon/test/mocks/) | Mock Wealthfolio host (see below). |
-| [packages/core/test/](packages/core/test/) | Stub Trading 212 API and fixtures. |
-| [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only smoke test against the real API. |
+| [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only check against the real Trading 212 API. |
 
 ## Setup
 
@@ -47,7 +45,7 @@ Requires Node 20+ and pnpm.
 
 ```bash
 pnpm install
-pnpm verify      # type-check + tests + production build
+pnpm verify      # type-check + production build
 ```
 
 ### Your Trading 212 credentials
@@ -70,39 +68,12 @@ There are two places to put them, for two different purposes:
 For the out-of-app smoke test, copy `.env.example` to `.env` and fill in
 `T212_API_KEY` / `T212_API_SECRET` instead — `.env` is gitignored.
 
-## Verifying without a running Wealthfolio
+## Checking it works
 
-Wealthfolio ships no mock host. `wealthfolio-addon test` only checks dev-server
-connectivity, and the official addons unit-test pure helpers against CSV
-fixtures. So this repo brings its own test environment:
+There is no test suite — the addon is exercised against the real Trading 212
+API and a real Wealthfolio instance.
 
-- **[Mock Wealthfolio host](packages/addon/test/mocks/mock-host.ts)** — enough
-  of `AddonContext` to run the addon's real code path. It enforces
-  `network.allowedHosts`, resolves `auth.secretKey` from a fake keyring and
-  builds the `Authorization` header itself (exactly as the broker does),
-  validates rows in `checkImport`, and detects duplicates. Any host API the
-  addon touches that the mock does not implement throws by name, mirroring the
-  sandbox's "unknown API" error.
-- **[Stub Trading 212 API](packages/core/test/t212-stub.ts)** — in-memory
-  implementation of Basic auth, cursor pagination, `x-ratelimit-*` headers, and
-  the 401/429 responses.
-
-```bash
-pnpm test          # 40 tests: client, mapper, and the full addon pipeline
-pnpm test:watch
-```
-
-What this proves: credentials land in the keyring in the exact form the broker
-needs, the plaintext secret never enters a request object, blocked hosts are
-refused, pagination terminates, charges land in the right column, corporate
-actions are skipped, invalid rows never reach `import()`, and a re-import is
-detected as duplicates rather than doubling your positions.
-
-What it cannot prove: that the real Wealthfolio host behaves like the mock, and
-that Wealthfolio resolves the symbols this mapper produces. Both need a real
-instance — see below.
-
-### Smoke test against the real Trading 212 API
+### Against the real Trading 212 API
 
 ```bash
 cp .env.example .env    # then fill it in

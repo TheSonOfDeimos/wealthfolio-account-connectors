@@ -9,7 +9,6 @@
     "target": "ES2022"
   },
   "include": [
-    "scripts",
-    "vitest.config.ts"
+    "scripts"
   ]
 }

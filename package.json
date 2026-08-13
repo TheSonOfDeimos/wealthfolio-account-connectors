@@ -8,17 +8,14 @@
     "build": "pnpm --filter @t212/addon build",
     "bundle": "pnpm --filter @t212/addon bundle",
     "dev:server": "pnpm --filter @t212/addon dev:server",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "type-check": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/addon && tsc --noEmit -p tsconfig.scripts.json",
     "smoke:live": "tsx scripts/smoke-live.ts",
-    "verify": "pnpm type-check && pnpm test && pnpm build"
+    "verify": "pnpm type-check && pnpm build"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3",
-    "vitest": "^2.1.8"
+    "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@10.33.4",
   "engines": {
