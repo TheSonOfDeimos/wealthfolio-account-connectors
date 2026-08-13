@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.zip
+
+# Credentials — never commit these
+.env
+.env.local
+.env.*.local

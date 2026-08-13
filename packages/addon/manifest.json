@@ -1,0 +1,57 @@
+{
+  "id": "trading212-import",
+  "name": "Trading 212 Import",
+  "version": "0.1.0",
+  "description": "Pulls filled orders from your Trading 212 account and imports them into Wealthfolio as BUY/SELL activities.",
+  "author": "Lev Kargalov",
+  "license": "MIT",
+  "main": "dist/addon.js",
+  "sdkVersion": "3.6.2",
+  "minWealthfolioVersion": "3.6.2",
+  "enabled": true,
+  "keywords": ["wealthfolio", "addon", "trading212", "import", "broker"],
+  "network": {
+    "allowedHosts": ["live.trading212.com"]
+  },
+  "hostDependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "@wealthfolio/addon-sdk": "^3.6.2"
+  },
+  "contributes": {
+    "routes": [{ "id": "trading212-import" }],
+    "links": {
+      "sidebar": [
+        {
+          "id": "trading212-import",
+          "route": "trading212-import",
+          "label": "Trading 212",
+          "icon": "plugs-connected",
+          "order": 100
+        }
+      ]
+    }
+  },
+  "permissions": [
+    {
+      "category": "network",
+      "functions": ["request"],
+      "purpose": "Read your order history from live.trading212.com. Only GET requests are made; the addon never places or cancels orders."
+    },
+    {
+      "category": "secrets",
+      "functions": ["set", "get", "delete"],
+      "purpose": "Keep your Trading 212 API key and secret in the OS keyring instead of in the addon bundle."
+    },
+    {
+      "category": "accounts",
+      "functions": ["getAll"],
+      "purpose": "Let you pick which Wealthfolio account the imported trades belong to."
+    },
+    {
+      "category": "activities",
+      "functions": ["checkImport", "import"],
+      "purpose": "Validate the mapped trades as a preview, then write them once you confirm."
+    }
+  ]
+}
