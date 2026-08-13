@@ -3,6 +3,7 @@ import type { AccountSummary } from 't212-sdk';
 import { useCallback, useEffect, useState } from 'react';
 import { SELECTED_ACCOUNT_STORAGE_KEY } from '../config';
 import { clearCredentials, hasCredentials, saveCredentials } from '../lib/credentials';
+import type { MappingIssue } from '../lib/mapper';
 import { commitImport, fetchAccountSummary, previewImport } from '../lib/sync';
 import type { PreviewResult } from '../lib/sync';
 
@@ -93,11 +94,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
     () =>
       run('Fetching order history…', async () => {
         setPreview(null);
-        const result = await previewImport(ctx, {
-          accountId,
-          onProgress: setStatus,
-        });
-        setPreview(result);
+        setPreview(await previewImport(ctx, accountId, setStatus));
         await ctx.api.storage.set(SELECTED_ACCOUNT_STORAGE_KEY, accountId);
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -276,40 +273,13 @@ function PreviewPanel({
     <div className="space-y-4">
       <p className="text-sm">
         <strong>{preview.validCount}</strong> ready to import,{' '}
-        <strong>{preview.invalidCount}</strong> with errors,{' '}
-        <strong>{preview.skipped.length}</strong> skipped, from {preview.pagesFetched} page
-        {preview.pagesFetched === 1 ? '' : 's'} of history.
+        <strong>{preview.activities.length - preview.validCount}</strong> with errors, from{' '}
+        {preview.pagesFetched} page{preview.pagesFetched === 1 ? '' : 's'} of history.
         {preview.truncated ? ' More history is available beyond the page limit.' : ''}
       </p>
 
-      {preview.warnings.length > 0 ? (
-        <details className="text-sm border rounded p-3">
-          <summary className="cursor-pointer font-medium">
-            {preview.warnings.length} mapping warning
-            {preview.warnings.length === 1 ? '' : 's'}
-          </summary>
-          <ul className="list-disc pl-5 mt-2 space-y-1 text-muted-foreground">
-            {preview.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-
-      {preview.skipped.length > 0 ? (
-        <details className="text-sm border rounded p-3">
-          <summary className="cursor-pointer font-medium">
-            {preview.skipped.length} fill{preview.skipped.length === 1 ? '' : 's'} not imported
-          </summary>
-          <ul className="list-disc pl-5 mt-2 space-y-1 text-muted-foreground">
-            {preview.skipped.map((skip, index) => (
-              <li key={`${skip.orderId ?? "?"}-${skip.fillId ?? index}`}>
-                {skip.ticker ?? "unknown"}: {skip.reason}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
+      <IssueList kind="skipped" label="entry" issues={preview.issues} />
+      <IssueList kind="warning" label="mapping warning" issues={preview.issues} />
 
       {preview.activities.length > 0 ? (
         <div className="overflow-x-auto border rounded">
@@ -381,6 +351,35 @@ function PreviewPanel({
         Wealthfolio
       </button>
     </div>
+  );
+}
+
+/** Skipped entries and mapping warnings render identically; only the wording differs. */
+function IssueList({
+  kind,
+  label,
+  issues,
+}: {
+  kind: MappingIssue['kind'];
+  label: string;
+  issues: MappingIssue[];
+}) {
+  const matching = issues.filter((issue) => issue.kind === kind);
+  if (matching.length === 0) return null;
+
+  return (
+    <details className="text-sm border rounded p-3">
+      <summary className="cursor-pointer font-medium">
+        {matching.length} {label}
+        {matching.length === 1 ? '' : 's'}
+        {kind === 'skipped' ? ' not imported' : ''}
+      </summary>
+      <ul className="list-disc pl-5 mt-2 space-y-1 text-muted-foreground">
+        {matching.map((issue) => (
+          <li key={issue.message}>{issue.message}</li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

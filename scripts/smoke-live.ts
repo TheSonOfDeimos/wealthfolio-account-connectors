@@ -1,36 +1,29 @@
 /**
  * Real-credential smoke test.
  *
- * Run with `pnpm smoke:live` after filling in `.env`. It performs the same two
- * reads the addon performs and maps the result with the same mapper, then
- * prints what would be imported. Nothing is written anywhere: Wealthfolio is
- * not involved, and no Trading 212 order is placed or changed.
+ * Fill in `DEV_CREDENTIALS` in src/config.ts, then `pnpm smoke:live`. It makes
+ * the same two reads the addon makes and maps the result with the same mapper,
+ * then prints what would be imported. Nothing is written anywhere: Wealthfolio
+ * is not involved, and no Trading 212 order is placed or changed.
  *
  * Out here `t212-sdk` is used exactly as documented — Node has a real `fetch`,
  * so no broker adapter is needed.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { T212 } from 't212-sdk';
 import type { HistoricalOrder } from 't212-sdk';
-import { mapOrdersToActivities } from '../packages/core/src/index';
+import { DEV_CREDENTIALS, T212_ENVIRONMENT } from '../src/config';
+import { mapOrdersToActivities } from '../src/lib/mapper';
 
-const env = loadEnv();
-const apiKey = env.T212_API_KEY;
-const apiSecret = env.T212_API_SECRET;
-const environment = env.T212_ENVIRONMENT === 'demo' ? 'demo' : 'live';
-
+const { apiKey, apiSecret } = DEV_CREDENTIALS;
 if (!apiKey || !apiSecret) {
-  console.error(
-    'Missing credentials. Copy .env.example to .env and set T212_API_KEY and T212_API_SECRET.',
-  );
+  console.error('Set DEV_CREDENTIALS in src/config.ts first.');
   process.exit(1);
 }
 
-const client = new T212({ apiKey, apiSecret, environment });
+const client = new T212({ apiKey, apiSecret, environment: T212_ENVIRONMENT });
 
-console.log(`Trading 212: ${environment}\n`);
+console.log(`Trading 212: ${T212_ENVIRONMENT}\n`);
 
 const summary = await client.account.getSummary();
 console.log('Account summary');
@@ -40,18 +33,15 @@ console.log(`  investments   ${summary.investments.currentValue} ${summary.curre
 console.log(`  total value   ${summary.totalValue} ${summary.currency}\n`);
 
 const entries: HistoricalOrder[] = [];
-let pages = 0;
 for await (const page of client.history.ordersPages()) {
   entries.push(...page.items);
-  pages += 1;
-  if (pages >= 2) break;
+  break; // one page is enough to see the shape
 }
-console.log(`Order history: ${entries.length} entries over ${pages} page(s)\n`);
 
-const mapped = mapOrdersToActivities(entries, { accountId: '<wealthfolio-account-id>' });
-console.log(`Mapped ${mapped.activities.length} activities, skipped ${mapped.skipped.length}:\n`);
+const { activities, issues } = mapOrdersToActivities(entries, '<wealthfolio-account-id>');
+console.log(`${entries.length} history entries → ${activities.length} activities\n`);
 
-for (const activity of mapped.activities) {
+for (const activity of activities) {
   console.log(
     `  ${String(activity.date).slice(0, 10)}  ${activity.activityType.padEnd(4)}  ` +
       `${String(activity.symbol).padEnd(8)}  qty ${activity.quantity}  @ ${activity.unitPrice} ` +
@@ -59,30 +49,23 @@ for (const activity of mapped.activities) {
   );
 }
 
-for (const skip of mapped.skipped) {
-  console.log(`  skipped ${skip.ticker ?? 'unknown'}: ${skip.reason}`);
+for (const issue of issues) {
+  console.log(`  ${issue.kind}: ${issue.message}`);
 }
 
-for (const warning of mapped.warnings) {
-  console.log(`  warning: ${warning}`);
+// Settles which currency `fill.price` is quoted in — see the currency note in
+// the README. If price x quantity x fxRate matches the wallet's netValue, the
+// price is in the instrument's currency and the mapper's `currency` is wrong.
+console.log('\nCurrency check (price x qty x fxRate vs wallet netValue):');
+for (const { order, fill } of entries.slice(0, 5)) {
+  if (!order || !fill || fill.type !== 'TRADE') continue;
+  const gross = Math.abs(fill.price * fill.quantity);
+  const wallet = fill.walletImpact;
+  console.log(
+    `  ${order.ticker.padEnd(12)} gross ${gross.toFixed(2)}  ` +
+      `xFx ${(gross * (wallet?.fxRate ?? 1)).toFixed(2)}  ` +
+      `netValue ${Math.abs(wallet?.netValue ?? 0).toFixed(2)} ${wallet?.currency ?? '?'}`,
+  );
 }
 
 console.log('\nNothing was written. This script only reads.');
-
-/** Minimal .env reader — avoids a dependency for one file. */
-function loadEnv(): Record<string, string> {
-  const values: Record<string, string> = { ...(process.env as Record<string, string>) };
-  try {
-    const contents = readFileSync(resolve(process.cwd(), '.env'), 'utf-8');
-    for (const line of contents.split('\n')) {
-      const match = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
-      if (!match) continue;
-      const [, key, rawValue] = match;
-      if (!key || values[key]) continue;
-      values[key] = rawValue!.replace(/^["']|["']$/g, '').trim();
-    }
-  } catch {
-    // No .env — fall back to the real environment.
-  }
-  return values;
-}

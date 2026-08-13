@@ -9,9 +9,9 @@
  *
  * There is no published rule for the venue letters, so this is a best-effort
  * normalisation plus an override table. It is deliberately conservative: when
- * the result looks doubtful the mapper says so rather than inventing a symbol,
- * and the ISIN always travels along in the activity comment so a wrong guess
- * stays traceable.
+ * the result looks doubtful it says so rather than hiding the guess, and the
+ * ISIN always travels along in the activity comment so a wrong symbol stays
+ * traceable.
  */
 
 /**
@@ -28,41 +28,29 @@ export const SYMBOL_OVERRIDES: Record<string, string> = {
 };
 
 /** Trailing segment of a Trading 212 ticker describing the instrument class. */
-const INSTRUMENT_CLASS_SEGMENTS = new Set(['EQ', 'ETF', 'ADR', 'REIT', 'FUND']);
+const INSTRUMENT_CLASSES = ['EQ', 'ETF', 'ADR', 'REIT', 'FUND'];
 
-export interface MappedSymbol {
-  /** Symbol to hand to Wealthfolio. */
-  symbol: string;
-  /** How it was derived — surfaced in the preview so guesses are visible. */
-  source: 'override' | 'us-listing' | 'venue-suffix' | 'passthrough';
-  /** True when the mapping is a heuristic guess worth eyeballing. */
-  needsReview: boolean;
-}
-
-export function mapTicker(t212Ticker: string): MappedSymbol {
+/** `needsReview` marks a heuristic guess worth eyeballing in the preview. */
+export function mapTicker(t212Ticker: string): { symbol: string; needsReview: boolean } {
   const override = SYMBOL_OVERRIDES[t212Ticker];
-  if (override) {
-    return { symbol: override, source: 'override', needsReview: false };
-  }
+  if (override) return { symbol: override, needsReview: false };
 
   const segments = t212Ticker.split('_');
   const last = segments[segments.length - 1];
-  const body = last && INSTRUMENT_CLASS_SEGMENTS.has(last) ? segments.slice(0, -1) : segments;
+  const body = last && INSTRUMENT_CLASSES.includes(last) ? segments.slice(0, -1) : segments;
 
   // AAPL_US_EQ → ["AAPL", "US"]: an explicit US listing maps straight through.
   if (body.length === 2 && body[1] === 'US') {
-    return { symbol: body[0]!, source: 'us-listing', needsReview: false };
+    return { symbol: body[0]!, needsReview: false };
   }
 
   const base = body[0] ?? t212Ticker;
 
   // VODl → VOD. A single trailing lowercase letter on an otherwise uppercase
   // ticker is Trading 212's venue marker, and Wealthfolio wants the bare
-  // symbol (often with an exchange suffix the user adds via SYMBOL_OVERRIDES).
-  const venueMatch = /^([A-Z0-9.]{1,6})([a-z])$/.exec(base);
-  if (venueMatch) {
-    return { symbol: venueMatch[1]!, source: 'venue-suffix', needsReview: true };
-  }
+  // symbol (often with an exchange suffix added via SYMBOL_OVERRIDES).
+  const venue = /^([A-Z0-9.]{1,6})([a-z])$/.exec(base);
+  if (venue) return { symbol: venue[1]!, needsReview: true };
 
-  return { symbol: base, source: 'passthrough', needsReview: body.length > 1 };
+  return { symbol: base, needsReview: body.length > 1 };
 }

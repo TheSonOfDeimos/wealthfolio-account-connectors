@@ -1,22 +1,41 @@
 {
-  "name": "trading-212-wealthfolio-adapter",
+  "name": "trading212-import-addon",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Imports Trading 212 activity into Wealthfolio as an addon",
+  "description": "Wealthfolio addon that imports Trading 212 orders as activities",
+  "main": "dist/addon.js",
   "scripts": {
-    "build": "pnpm --filter @t212/addon build",
-    "bundle": "pnpm --filter @t212/addon bundle",
-    "dev:server": "pnpm --filter @t212/addon dev:server",
-    "type-check": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/addon && tsc --noEmit -p tsconfig.scripts.json",
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "dev:server": "wealthfolio-addon dev",
+    "clean": "rm -rf dist",
+    "package": "zip -r dist/trading212-import-$npm_package_version.zip manifest.json dist/ README.md -x '*.map' -x '*.zip'",
+    "bundle": "pnpm clean && pnpm build && pnpm package",
+    "type-check": "tsc --noEmit",
     "smoke:live": "tsx scripts/smoke-live.ts",
     "verify": "pnpm type-check && pnpm build"
   },
+  "dependencies": {
+    "t212-sdk": "0.3.2"
+  },
+  "peerDependencies": {
+    "@wealthfolio/addon-sdk": "^3.6.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "t212-sdk": "0.3.2",
+    "@types/react": "^19.2.13",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "@wealthfolio/addon-dev-tools": "^3.6.2",
+    "@wealthfolio/addon-sdk": "^3.6.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "^7.3.2"
   },
   "packageManager": "pnpm@10.33.4",
   "engines": {

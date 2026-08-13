@@ -7,19 +7,44 @@ settings:
 importers:
 
   .:
+    dependencies:
+      t212-sdk:
+        specifier: 0.3.2
+        version: 0.3.2
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
-      t212-sdk:
-        specifier: 0.3.2
-        version: 0.3.2
+      '@types/react':
+        specifier: ^19.2.13
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.4(@types/react@19.2.18)
+      '@vitejs/plugin-react':
+        specifier: ^5.1.4
+        version: 5.2.0(vite@7.3.6(@types/node@22.20.1)(tsx@4.23.12))
+      '@wealthfolio/addon-dev-tools':
+        specifier: ^3.6.2
+        version: 3.6.2
+      '@wealthfolio/addon-sdk':
+        specifier: ^3.6.2
+        version: 3.6.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      react:
+        specifier: ^19.2.4
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.4
+        version: 19.2.8(react@19.2.8)
       tsx:
         specifier: ^4.19.2
         version: 4.23.12
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vite:
+        specifier: ^7.3.2
+        version: 7.3.6(@types/node@22.20.1)(tsx@4.23.12)
 
   packages/addon:
     dependencies:

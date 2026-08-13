@@ -10,10 +10,10 @@ the real one.
 
 ```
 Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  checkImport  ──►  import
- /history/orders   (client)        (packages/core)            (preview)      (write)
+ /history/orders   (client)      (src/lib/mapper.ts)          (preview)      (write)
                       ▲
                       │ brokered fetch: host-attached auth, allowlisted host
-                Wealthfolio addon sandbox (packages/addon)
+                    Wealthfolio addon sandbox
 ```
 
 ## What it does today
@@ -36,8 +36,11 @@ Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  c
 
 | Path | What lives there |
 | --- | --- |
-| [packages/core/](packages/core/) | The activity mapper and symbol normalisation — the part no Trading 212 library covers. |
-| [packages/addon/](packages/addon/) | The Wealthfolio addon: manifest, sandbox glue, React page. |
+| [manifest.json](manifest.json) | Addon identity, sidebar entry, permissions, allowed hosts. |
+| [src/addon.tsx](src/addon.tsx) | Entry point: registers the route, captures the host context. |
+| [src/config.ts](src/config.ts) | Credentials, environment, page limit. |
+| [src/lib/](src/lib/) | `brokered-fetch` (sandbox egress), `credentials` (keyring), `mapper` + `symbols` (translation), `sync` (pipeline). |
+| [src/pages/](src/pages/) | The import page. |
 | [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only check against the real Trading 212 API. |
 
 ## Setup
@@ -54,20 +57,17 @@ pnpm verify      # type-check + production build
 Generate a key pair in the Trading 212 mobile app (Settings → API):
 <https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key>
 
-There are two places to put them, for two different purposes:
+`DEV_CREDENTIALS` in [src/config.ts](src/config.ts) is the one place they live
+during development. Fill it in and the addon moves the pair into the OS keyring
+on first start, while `pnpm smoke:live` reads it directly to call the API from
+Node.
 
-1. **In the addon UI** — the normal path. Paste the key and secret into the
-   addon's settings form and they go straight into the OS keyring. Wealthfolio
-   attaches them to each request host-side; the addon code never sees them
-   again.
-
-2. **`DEV_CREDENTIALS` in [packages/addon/src/config.ts](packages/addon/src/config.ts)** —
-   the free variable for local development. Fill it in and the addon moves the
-   values into the keyring on first start. Anything you put there is compiled
-   into `dist/addon.js` in plaintext, so clear it before sharing a build.
-
-For the out-of-app smoke test, copy `.env.example` to `.env` and fill in
-`T212_API_KEY` / `T212_API_SECRET` instead — `.env` is gitignored.
+Anything you put there is compiled into `dist/addon.js` in plaintext and the
+file is tracked by git, so keep local edits out of your diffs with
+`git update-index --skip-worktree src/config.ts`, and clear it before sharing a
+build. Leave it empty and the addon asks for the pair in its settings form
+instead — the right way round for a shared addon, and the only path that keeps
+credentials out of the bundle entirely.
 
 ## Checking it works
 
@@ -77,12 +77,12 @@ API and a real Wealthfolio instance.
 ### Against the real Trading 212 API
 
 ```bash
-cp .env.example .env    # then fill it in
 pnpm smoke:live
 ```
 
-Performs the same two reads the addon performs and prints what would be
-imported. Nothing is written; Wealthfolio is not involved.
+Performs the same two reads the addon performs, maps them with the same mapper,
+and prints what would be imported. Nothing is written; Wealthfolio is not
+involved. It also prints a currency check — see the note below.
 
 ## Running inside Wealthfolio
 
@@ -97,7 +97,7 @@ Wealthfolio auto-discovers the dev server and the addon appears in the sidebar
 as **Trading 212**. For a distributable package:
 
 ```bash
-pnpm bundle        # packages/addon/dist/trading212-import-0.1.0.zip
+pnpm bundle        # dist/trading212-import-0.1.0.zip
 ```
 
 ## Safety notes
@@ -105,16 +105,22 @@ pnpm bundle        # packages/addon/dist/trading212-import-0.1.0.zip
 - The addon talks to **live.trading212.com** — your real account. Every call it
   makes is a `GET`; it never places, amends, or cancels an order. To rehearse
   against paper money, set `T212_ENVIRONMENT` in
-  [packages/addon/src/config.ts](packages/addon/src/config.ts) to `'demo'`
+  [src/config.ts](src/config.ts) to `'demo'`
   **and** add `demo.trading212.com` to `network.allowedHosts` in
-  [manifest.json](packages/addon/manifest.json) — the broker refuses any host
+  [manifest.json](manifest.json) — the broker refuses any host
   the manifest does not declare.
 - The only write is into Wealthfolio, behind the preview and an explicit click.
 - Symbol mapping is a heuristic. Trading 212 tickers like `VODl_EQ` carry a
   venue letter with no published rule, so guesses are flagged in the preview
   and correctable via `SYMBOL_OVERRIDES` in
-  [packages/core/src/symbols.ts](packages/core/src/symbols.ts). The ISIN travels
-  in each activity's comment so a wrong guess stays traceable.
+  [src/lib/symbols.ts](src/lib/symbols.ts). The ISIN travels in each activity's
+  comment so a wrong guess stays traceable.
+- **Open question — trade currency.** The mapper labels each row with the
+  wallet currency while taking `unitPrice` from `fill.price`, which may be
+  quoted in the instrument's currency. If so, a US stock bought in a GBP
+  account would be priced in USD but labelled GBP. `pnpm smoke:live` prints the
+  arithmetic that settles it; fix [src/lib/mapper.ts](src/lib/mapper.ts) before
+  trusting an import of cross-currency trades.
 
 ## Not yet covered
 
