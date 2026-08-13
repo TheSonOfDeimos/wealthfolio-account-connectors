@@ -97,7 +97,7 @@ Wealthfolio auto-discovers the dev server and the addon appears in the sidebar
 as **Trading 212**. For a distributable package:
 
 ```bash
-pnpm bundle        # dist/trading212-import-0.1.0.zip
+pnpm bundle        # trading212-import-0.1.0.zip
 ```
 
 ## Safety notes
