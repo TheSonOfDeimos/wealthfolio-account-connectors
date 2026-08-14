@@ -1,6 +1,7 @@
 import type { ActivityImport } from '@wealthfolio/addon-sdk';
 import type { HistoricalOrder, Tax, TaxName } from 't212-sdk';
-import { mapTicker } from './symbols';
+import type { InstrumentIndex } from './instruments';
+import { resolveSymbol } from './symbols';
 
 /**
  * Trading 212 fills → Wealthfolio activities.
@@ -49,6 +50,8 @@ export interface MapResult {
 export function mapOrdersToActivities(
   entries: HistoricalOrder[],
   accountId: string,
+  /** Trading 212's instrument catalogue; an empty map degrades to guessing. */
+  instruments: InstrumentIndex = new Map(),
 ): MapResult {
   const activities: ActivityImport[] = [];
   const issues: MappingIssue[] = [];
@@ -93,12 +96,12 @@ export function mapOrdersToActivities(
     }
 
     const ticker = order.instrument?.ticker ?? order.ticker;
-    const symbol = mapTicker(ticker);
+    const symbol = resolveSymbol(ticker, instruments.get(ticker));
     const charges = splitCharges(fill.walletImpact?.taxes ?? [], currency, warn, label);
 
     if (symbol.needsReview) {
       warn(
-        `${label}: symbol "${symbol.symbol}" was guessed from Trading 212 ticker "${ticker}". Add an entry to SYMBOL_OVERRIDES if it is wrong.`,
+        `${label}: "${ticker}" is not in the instrument catalogue, so the symbol "${symbol.symbol}" was guessed from the ticker. Add an entry to SYMBOL_OVERRIDES if it is wrong.`,
       );
     }
     if (!order.side) {

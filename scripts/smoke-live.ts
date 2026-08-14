@@ -13,6 +13,7 @@
 import { T212 } from 't212-sdk';
 import type { HistoricalOrder } from 't212-sdk';
 import { DEV_CREDENTIALS, T212_ENVIRONMENT } from '../src/config';
+import { loadInstrumentIndex } from '../src/lib/instruments';
 import { mapOrdersToActivities } from '../src/lib/mapper';
 
 const { apiKey, apiSecret } = DEV_CREDENTIALS;
@@ -38,7 +39,31 @@ for await (const page of client.history.ordersPages()) {
   break; // one page is enough to see the shape
 }
 
-const { activities, issues } = mapOrdersToActivities(entries, '<wealthfolio-account-id>');
+const instruments = await loadInstrumentIndex(client, (m) => console.log(`  ${m}`));
+
+// What the catalogue actually says about the instruments in your history —
+// the check that decides whether `shortName` is a usable symbol.
+console.log('Instrument catalogue (ticker → shortName / isin / currency / type):');
+const seen = new Set<string>();
+for (const { order } of entries) {
+  const ticker = order?.instrument?.ticker ?? order?.ticker;
+  if (!ticker || seen.has(ticker)) continue;
+  seen.add(ticker);
+  const found = instruments.get(ticker);
+  console.log(
+    found
+      ? `  ${ticker.padEnd(14)} ${String(found.shortName).padEnd(10)} ${found.isin}  ` +
+          `${found.currencyCode}  ${found.type}`
+      : `  ${ticker.padEnd(14)} NOT IN CATALOGUE`,
+  );
+}
+console.log(`  (${instruments.size} instruments indexed)\n`);
+
+const { activities, issues } = mapOrdersToActivities(
+  entries,
+  '<wealthfolio-account-id>',
+  instruments,
+);
 console.log(`${entries.length} history entries → ${activities.length} activities\n`);
 
 for (const activity of activities) {

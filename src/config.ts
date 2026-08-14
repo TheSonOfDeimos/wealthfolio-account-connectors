@@ -21,8 +21,8 @@
  *      git update-index --skip-worktree src/config.ts
  */
 export const DEV_CREDENTIALS = {
-  apiKey: '',
-  apiSecret: '',
+  apiKey: 'REDACTED-API-KEY',
+  apiSecret: 'REDACTED-API-SECRET',
 };
 
 /**

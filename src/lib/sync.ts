@@ -7,6 +7,7 @@ import { T212 } from 't212-sdk';
 import type { AccountSummary, HistoricalOrder } from 't212-sdk';
 import { MAX_HISTORY_PAGES, T212_ENVIRONMENT } from '../config';
 import { createBrokeredFetch } from './brokered-fetch';
+import { loadInstrumentIndex } from './instruments';
 import { mapOrdersToActivities } from './mapper';
 import type { MappingIssue } from './mapper';
 
@@ -39,6 +40,16 @@ export async function previewImport(
   accountId: string,
   onProgress: (message: string) => void = () => {},
 ): Promise<PreviewResult> {
+  const t212 = client(ctx);
+  const loadIssues: MappingIssue[] = [];
+
+  // Resolves Trading 212's opaque tickers to real symbols. Fetched once and
+  // reused for every row; failure degrades to guessing rather than aborting.
+  onProgress('Loading the Trading 212 instrument catalogue…');
+  const instruments = await loadInstrumentIndex(t212, (message) =>
+    loadIssues.push({ kind: 'warning', message }),
+  );
+
   onProgress('Fetching order history from Trading 212…');
 
   // The SDK's iterator handles the cursor and paces itself against the
@@ -47,7 +58,7 @@ export async function previewImport(
   let pagesFetched = 0;
   let truncated = false;
 
-  for await (const page of client(ctx).history.ordersPages()) {
+  for await (const page of t212.history.ordersPages()) {
     entries.push(...page.items);
     pagesFetched += 1;
     onProgress(`Fetched page ${pagesFetched} (${page.items.length} entries)…`);
@@ -58,14 +69,14 @@ export async function previewImport(
   }
 
   onProgress(`Mapping ${entries.length} entries…`);
-  const { activities, issues } = mapOrdersToActivities(entries, accountId);
+  const { activities, issues } = mapOrdersToActivities(entries, accountId, instruments);
 
   onProgress('Validating against Wealthfolio…');
   const checked = activities.length > 0 ? await ctx.api.activities.checkImport(activities) : [];
 
   return {
     activities: checked,
-    issues,
+    issues: [...loadIssues, ...issues],
     truncated,
     pagesFetched,
     validCount: checked.filter((row) => row.isValid).length,

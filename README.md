@@ -110,11 +110,13 @@ pnpm bundle        # trading212-import-0.1.0.zip
   [manifest.json](manifest.json) — the broker refuses any host
   the manifest does not declare.
 - The only write is into Wealthfolio, behind the preview and an explicit click.
-- Symbol mapping is a heuristic. Trading 212 tickers like `VODl_EQ` carry a
-  venue letter with no published rule, so guesses are flagged in the preview
-  and correctable via `SYMBOL_OVERRIDES` in
+- Symbols come from Trading 212's instrument catalogue
+  (`GET /equity/metadata/instruments`), not from parsing the ticker — its
+  format is undocumented. Instruments missing from the catalogue (delisted
+  names still in your history) fall back to a ticker heuristic and are flagged
+  in the preview; correct those with `SYMBOL_OVERRIDES` in
   [src/lib/symbols.ts](src/lib/symbols.ts). The ISIN travels in each activity's
-  comment so a wrong guess stays traceable.
+  comment so a wrong symbol stays traceable.
 - **Open question — trade currency.** The mapper labels each row with the
   wallet currency while taking `unitPrice` from `fill.price`, which may be
   quoted in the instrument's currency. If so, a US stock bought in a GBP
