@@ -123,11 +123,12 @@ Three options, cheapest first.
 data, no install step, ~2s. Debuggable with F5 in VS Code. Wealthfolio only
 becomes necessary once you are testing `checkImport` / `import` behaviour.
 
-**2. Against the container — `pnpm dev:deploy`.** Watches `src/` and
-`manifest.json`, runs the full bundle (clean → type-check → build → zip) and
-pushes it to the container's `POST /addons/install-zip`. About 2.5s per cycle.
+**2. Against the container — the `Addon: deploy to Wealthfolio` task.** Runs
+the full bundle (clean → type-check → build → zip) and pushes the zip to the
+container's `POST /addons/install-zip` — the same call the "Install from file"
+button makes. About 2.5s. Deliberately explicit rather than save-triggered.
 Reinstalling preserves stored secrets, so credentials survive each round. The
-browser tab needs a manual reload — the frontend loads addons at startup and
+browser tab needs a manual reload: the frontend loads addons at startup and
 nothing external can re-trigger that.
 
 ```bash
