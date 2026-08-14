@@ -210,10 +210,20 @@
         "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
       },
       {
-        // Opens Wealthfolio in Chrome with DevTools wired into VS Code: the
-        // addon's console output and network calls land in the Debug Console.
-        // Use this when the addon misbehaves inside the sandbox — Simple
-        // Browser shows the page but gives you no console.
+        // js-debug's "Web App (Integrated Browser)": a Chromium browser in an
+        // editor tab WITH the debugger attached, so console output and network
+        // calls land in the Debug Console. Chromium, so unlike Safari it can
+        // host the addon sandbox.
+        "name": "Wealthfolio (integrated browser)",
+        "type": "editor-browser",
+        "request": "launch",
+        "url": "http://127.0.0.1:8088",
+        "webRoot": "${workspaceFolder}"
+      },
+      {
+        // Same thing in a real Chrome window. Worth having when you need the
+        // full DevTools panel — element inspection, the network waterfall —
+        // rather than just the Debug Console.
         "name": "Wealthfolio (Chrome + DevTools)",
         "type": "chrome",
         "request": "launch",
