@@ -35,48 +35,19 @@
     "tasks": [
       // ===== Addon =====
       {
-        "label": "Addon: build",
-        "type": "shell",
-        "command": "pnpm",
-        "args": ["build"],
-        "options": {
-          "cwd": "${workspaceFolder}"
-        },
-        "group": {
-          "kind": "build",
-          "isDefault": true
-        },
-        "problemMatcher": ["$tsc"],
-        "presentation": {
-          "echo": true,
-          "reveal": "always",
-          "panel": "dedicated",
-          "clear": false
-        }
-      },
-      {
-        "label": "Addon: type-check",
-        "type": "shell",
-        "command": "pnpm",
-        "args": ["type-check"],
-        "options": {
-          "cwd": "${workspaceFolder}"
-        },
-        "problemMatcher": ["$tsc"],
-        "presentation": {
-          "echo": true,
-          "reveal": "always",
-          "panel": "dedicated",
-          "clear": false
-        }
-      },
-      {
+        // clean → type-check → vite build → zip. The type-check is the reason
+        // this is one task: vite strips types without checking them, so a
+        // build alone can package code that does not compile.
         "label": "Addon: bundle (zip)",
         "type": "shell",
         "command": "pnpm",
         "args": ["bundle"],
         "options": {
           "cwd": "${workspaceFolder}"
+        },
+        "group": {
+          "kind": "build",
+          "isDefault": true
         },
         "problemMatcher": ["$tsc"],
         "presentation": {
@@ -194,19 +165,6 @@
         "runtimeArgs": ["--import", "tsx"],
         "cwd": "${workspaceFolder}",
         "console": "integratedTerminal",
-        "sourceMaps": true,
-        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
-      },
-      {
-        // Same, but stops on the first line so you can step from the top.
-        "name": "Smoke test (debug, break on entry)",
-        "type": "node",
-        "request": "launch",
-        "program": "${workspaceFolder}/scripts/smoke-live.ts",
-        "runtimeArgs": ["--import", "tsx"],
-        "cwd": "${workspaceFolder}",
-        "console": "integratedTerminal",
-        "stopOnEntry": true,
         "sourceMaps": true,
         "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
       }

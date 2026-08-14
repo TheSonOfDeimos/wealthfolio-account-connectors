@@ -9,7 +9,7 @@
     "build": "vite build",
     "clean": "rm -rf dist *.zip",
     "package": "zip -r trading212-import-$npm_package_version.zip manifest.json dist/ README.md -x '*.map'",
-    "bundle": "pnpm clean && pnpm build && pnpm package",
+    "bundle": "pnpm clean && pnpm type-check && pnpm build && pnpm package",
     "type-check": "tsc --noEmit",
     "smoke:live": "tsx scripts/smoke-live.ts",
     "verify": "pnpm type-check && pnpm build"
