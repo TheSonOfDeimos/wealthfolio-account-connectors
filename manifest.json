@@ -40,8 +40,8 @@
     },
     {
       "category": "secrets",
-      "functions": ["set", "get", "delete"],
-      "purpose": "Keep your Trading 212 API key and secret in the OS keyring instead of in the addon bundle."
+      "functions": ["set", "get", "use", "delete"],
+      "purpose": "Keep your Trading 212 API key and secret in the keyring, and let Wealthfolio attach them to Trading 212 requests without the addon reading them back. 'use' is what the network broker needs to resolve auth.secretKey."
     },
     {
       "category": "accounts",
