@@ -37,6 +37,9 @@ services:
       WF_SECRET_KEY: "${WF_SECRET_KEY:?Set WF_SECRET_KEY in .env.docker}"
       # Safe only because the port above is bound to localhost.
       WF_AUTH_REQUIRED: "false"
+      # Lets Wealthfolio's own frontend dev server (Vite, :1420) talk to this
+      # backend — the setup that gives real addon hot reload. See README.
+      WF_CORS_ALLOW_ORIGINS: "http://localhost:1420"
       WF_REQUEST_TIMEOUT_MS: "30000"
     healthcheck:
       test:

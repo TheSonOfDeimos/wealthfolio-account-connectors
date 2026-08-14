@@ -12,7 +12,8 @@
     "bundle": "pnpm clean && pnpm type-check && pnpm build && pnpm package",
     "type-check": "tsc --noEmit",
     "smoke:live": "tsx scripts/smoke-live.ts",
-    "verify": "pnpm type-check && pnpm build"
+    "verify": "pnpm type-check && pnpm build",
+    "dev:deploy": "tsx scripts/dev-deploy.ts"
   },
   "dependencies": {
     "t212-sdk": "0.3.2"

@@ -117,17 +117,44 @@ for the password-hash and OIDC options.
 
 ## The development loop
 
+Three options, cheapest first.
+
+**1. Mapper changes — `pnpm smoke:live`.** Same mapping code, real Trading 212
+data, no install step, ~2s. Debuggable with F5 in VS Code. Wealthfolio only
+becomes necessary once you are testing `checkImport` / `import` behaviour.
+
+**2. Against the container — `pnpm dev:deploy`.** Watches `src/` and
+`manifest.json`, runs the full bundle (clean → type-check → build → zip) and
+pushes it to the container's `POST /addons/install-zip`. About 2.5s per cycle.
+Reinstalling preserves stored secrets, so credentials survive each round. The
+browser tab needs a manual reload — the frontend loads addons at startup and
+nothing external can re-trigger that.
+
 ```bash
-pnpm bundle        # trading212-import-0.1.0.zip
+pnpm dev:deploy              # WF_URL=… to point elsewhere
 ```
 
-Then reinstall through Settings → Addons → **+**, and the addon appears in the
-sidebar as **Trading 212**.
+**3. True hot reload — the paved path.** Wealthfolio's addon dev server works
+against its frontend running in Vite dev mode, which can talk to the
+containerised backend. No Rust toolchain and no Tauri build required; the
+container stays as the backend.
 
-Wealthfolio does have a hot-reload dev server, but it only works against a
-Wealthfolio built from source — release builds compile the feature out — so
-this repo does not carry it. For mapper changes `pnpm smoke:live` is the faster
-loop anyway: same mapping code, real data, no install step.
+```bash
+# once, in a clone of wealthfolio/wealthfolio
+pnpm install
+
+# terminal 1 — frontend in addon-dev mode, proxying to our container
+VITE_API_TARGET=http://127.0.0.1:8088 pnpm dev:addons     # serves :1420
+
+# terminal 2 — in this repo (needs @wealthfolio/addon-dev-tools back)
+pnpm add -D @wealthfolio/addon-dev-tools@^3.6.2
+npx wealthfolio-addon dev                                  # serves :3001
+```
+
+Open <http://localhost:1420>. The frontend runs with `import.meta.env.DEV`
+true, which is the flag that enables addon dev mode, so it discovers
+`localhost:3001`, polls `/status`, and re-mounts the addon on every rebuild —
+no reinstall, no tab reload. `compose.yml` already allows CORS from `:1420`.
 
 ## Safety notes
 
