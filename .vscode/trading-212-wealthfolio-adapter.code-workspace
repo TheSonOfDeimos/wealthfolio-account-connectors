@@ -160,24 +160,36 @@
         }
       },
       {
-        "label": "Wealthfolio: open in browser",
+        // Opens in VS Code's built-in Simple Browser rather than the system
+        // default. Tasks can only run shell commands, so the actual work is
+        // done by the `openWealthfolio` input below — a `command` input runs
+        // when the task starts. The shell part is a no-op that forces it.
+        //
+        // Not the default browser on purpose: Safari cannot host Wealthfolio's
+        // addon sandbox (it blocks blob: module imports from the iframe's
+        // opaque origin). Simple Browser is a Chromium webview, so it can.
+        "label": "Wealthfolio: open in editor",
         "type": "shell",
-        "command": "open",
-        "args": ["http://127.0.0.1:8088"],
-        "windows": {
-          "command": "cmd",
-          "args": ["/c", "start", "http://127.0.0.1:8088"]
-        },
+        "command": "true",
+        "args": ["${input:openWealthfolio}"],
         "options": {
           "cwd": "${workspaceFolder}"
         },
         "problemMatcher": [],
         "presentation": {
-          "echo": true,
+          "echo": false,
           "reveal": "silent",
-          "panel": "dedicated",
+          "panel": "shared",
           "clear": false
         }
+      }
+    ],
+    "inputs": [
+      {
+        "id": "openWealthfolio",
+        "type": "command",
+        "command": "simpleBrowser.api.open",
+        "args": ["http://127.0.0.1:8088"]
       }
     ]
   },
@@ -196,6 +208,17 @@
         "console": "integratedTerminal",
         "sourceMaps": true,
         "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
+      {
+        // Opens Wealthfolio in Chrome with DevTools wired into VS Code: the
+        // addon's console output and network calls land in the Debug Console.
+        // Use this when the addon misbehaves inside the sandbox — Simple
+        // Browser shows the page but gives you no console.
+        "name": "Wealthfolio (Chrome + DevTools)",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://127.0.0.1:8088",
+        "webRoot": "${workspaceFolder}"
       }
     ]
   },

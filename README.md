@@ -96,8 +96,16 @@ the same handler, so the network broker this addon depends on is present.
 cp .env.docker.example .env.docker
 echo "WF_SECRET_KEY=$(openssl rand -base64 32)" >> .env.docker
 docker compose --env-file .env.docker up -d
-open http://127.0.0.1:8088
 ```
+
+Then open <http://127.0.0.1:8088> — the `Wealthfolio: open in editor` task
+does it in VS Code's Simple Browser.
+
+> **Not Safari.** Safari cannot host Wealthfolio's addon sandbox: the host
+> renders addons in an `<iframe sandbox="allow-scripts" srcdoc=…>` and then
+> dynamically imports `blob:` URLs from it, which WebKit blocks from an opaque
+> origin. The addon times out with *"Failed to start add-on"* before any of its
+> code runs. Chromium browsers — including VS Code's Simple Browser — are fine.
 
 Then install `trading212-import-0.1.0.zip` through Settings → Addons → **+**.
 The file picker reads from your machine, not the container, so nothing needs
