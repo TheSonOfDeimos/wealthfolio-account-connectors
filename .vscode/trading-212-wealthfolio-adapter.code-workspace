@@ -20,9 +20,15 @@
     },
 
     // ===== TypeScript =====
-    // Use the workspace compiler, so the editor and `pnpm type-check` agree.
-    "typescript.tsdk": "node_modules/typescript/lib",
-    "typescript.preferences.importModuleSpecifier": "relative",
+    // Use the workspace compiler (5.9.3) rather than the one VS Code bundles
+    // (6.x), so the editor and `pnpm type-check` agree.
+    //
+    // The path is relative to THIS FILE, not to the folder above — a workspace
+    // file resolves it from its own directory. Hence the `../`. You must also
+    // run "TypeScript: Select TypeScript Version → Use Workspace Version"
+    // once: it is a trust-restricted setting and is ignored until then.
+    "js/ts.tsdk.path": "../node_modules/typescript/lib",
+    "js/ts.preferences.importModuleSpecifier": "relative",
     "[typescript]": {
       "editor.formatOnSave": true
     },
