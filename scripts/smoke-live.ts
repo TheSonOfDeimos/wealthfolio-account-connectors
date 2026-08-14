@@ -11,9 +11,8 @@
  */
 
 import { T212 } from 't212-sdk';
-import type { HistoricalOrder } from 't212-sdk';
+import type { HistoricalOrder, TradableInstrument } from 't212-sdk';
 import { DEV_CREDENTIALS, T212_ENVIRONMENT } from '../src/config';
-import { loadInstrumentIndex } from '../src/lib/instruments';
 import { mapOrdersToActivities } from '../src/lib/mapper';
 
 const { apiKey, apiSecret } = DEV_CREDENTIALS;
@@ -39,7 +38,10 @@ for await (const page of client.history.ordersPages()) {
   break; // one page is enough to see the shape
 }
 
-const instruments = await loadInstrumentIndex(client, (m) => console.log(`  ${m}`));
+const list = await client.instruments.list();
+const instruments = new Map<string, TradableInstrument>(
+  list.map((item) => [item.ticker, item]),
+);
 
 // What the catalogue actually says about the instruments in your history —
 // the check that decides whether `shortName` is a usable symbol.

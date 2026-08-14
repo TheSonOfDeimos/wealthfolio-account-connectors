@@ -4,10 +4,9 @@ import type {
   ImportActivitiesResult,
 } from '@wealthfolio/addon-sdk';
 import { T212 } from 't212-sdk';
-import type { AccountSummary, HistoricalOrder } from 't212-sdk';
+import type { AccountSummary, HistoricalOrder, TradableInstrument } from 't212-sdk';
 import { MAX_HISTORY_PAGES, T212_ENVIRONMENT } from '../config';
 import { createBrokeredFetch } from './brokered-fetch';
-import { loadInstrumentIndex } from './instruments';
 import { mapOrdersToActivities } from './mapper';
 import type { MappingIssue } from './mapper';
 
@@ -43,12 +42,22 @@ export async function previewImport(
   const t212 = client(ctx);
   const loadIssues: MappingIssue[] = [];
 
-  // Resolves Trading 212's opaque tickers to real symbols. Fetched once and
-  // reused for every row; failure degrades to guessing rather than aborting.
+  // Resolves Trading 212's opaque tickers to real symbols. One request returns
+  // the whole catalogue, so it is fetched once and reused for every row.
   onProgress('Loading the Trading 212 instrument catalogue…');
-  const instruments = await loadInstrumentIndex(t212, (message) =>
-    loadIssues.push({ kind: 'warning', message }),
-  );
+  let instruments = new Map<string, TradableInstrument>();
+  try {
+    const list = await t212.instruments.list();
+    instruments = new Map(list.map((item) => [item.ticker, item]));
+  } catch (error) {
+    // A missing catalogue costs symbol resolution, not the whole import.
+    loadIssues.push({
+      kind: 'warning',
+      message: `Could not load the instrument catalogue (${
+        error instanceof Error ? error.message : String(error)
+      }). Raw Trading 212 tickers were used as symbols.`,
+    });
+  }
 
   onProgress('Fetching order history from Trading 212…');
 

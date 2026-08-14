@@ -1,7 +1,6 @@
 import type { ActivityImport } from '@wealthfolio/addon-sdk';
-import type { HistoricalOrder, Tax, TaxName } from 't212-sdk';
-import type { InstrumentIndex } from './instruments';
-import { resolveSymbol } from './symbols';
+import type { HistoricalOrder, Tax, TaxName, TradableInstrument } from 't212-sdk';
+import { SYMBOL_OVERRIDES } from '../config';
 
 /**
  * Trading 212 fills → Wealthfolio activities.
@@ -50,8 +49,12 @@ export interface MapResult {
 export function mapOrdersToActivities(
   entries: HistoricalOrder[],
   accountId: string,
-  /** Trading 212's instrument catalogue; an empty map degrades to guessing. */
-  instruments: InstrumentIndex = new Map(),
+  /**
+   * Trading 212's instrument catalogue, keyed by ticker. Its `ticker` is an
+   * opaque id (`AAPL_US_EQ`) with no published grammar, so the catalogue is
+   * the only sound way to get a real symbol out of one.
+   */
+  instruments: Map<string, TradableInstrument> = new Map(),
 ): MapResult {
   const activities: ActivityImport[] = [];
   const issues: MappingIssue[] = [];
@@ -96,12 +99,16 @@ export function mapOrdersToActivities(
     }
 
     const ticker = order.instrument?.ticker ?? order.ticker;
-    const symbol = resolveSymbol(ticker, instruments.get(ticker));
+    const catalogued = instruments.get(ticker)?.shortName?.trim();
+    // Falling back to the raw Trading 212 ticker is deliberate: Wealthfolio
+    // will fail to resolve it and say so, which beats inventing a symbol that
+    // silently creates the wrong asset.
+    const symbol = SYMBOL_OVERRIDES[ticker] ?? catalogued ?? ticker;
     const charges = splitCharges(fill.walletImpact?.taxes ?? [], currency, warn, label);
 
-    if (symbol.needsReview) {
+    if (!SYMBOL_OVERRIDES[ticker] && !catalogued) {
       warn(
-        `${label}: "${ticker}" is not in the instrument catalogue, so the symbol "${symbol.symbol}" was guessed from the ticker. Add an entry to SYMBOL_OVERRIDES if it is wrong.`,
+        `${label}: not in the instrument catalogue, so the raw ticker was used as the symbol. Add "${ticker}" to SYMBOL_OVERRIDES in config.ts.`,
       );
     }
     if (!order.side) {
@@ -112,7 +119,7 @@ export function mapOrdersToActivities(
       accountId,
       activityType: order.side === 'SELL' ? 'SELL' : 'BUY',
       date: fill.filledAt,
-      symbol: symbol.symbol,
+      symbol,
       symbolName: order.instrument?.name,
       quantity,
       unitPrice: fill.price,

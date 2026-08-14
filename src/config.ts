@@ -38,6 +38,20 @@ export const DEV_CREDENTIALS = {
  */
 export const T212_ENVIRONMENT: 'live' | 'demo' = 'live';
 
+/**
+ * Symbol corrections, keyed by Trading 212 ticker.
+ *
+ * Symbols normally come from Trading 212's instrument catalogue. Add an entry
+ * here when the catalogue's `shortName` is not what Wealthfolio's market-data
+ * provider expects — typically to add an exchange suffix — or when an
+ * instrument is missing from the catalogue entirely, which the preview will
+ * tell you about by name.
+ */
+export const SYMBOL_OVERRIDES: Record<string, string> = {
+  // 'VODl_EQ': 'VOD.L',
+  // 'AIRp_EQ': 'AIR.PA',
+};
+
 /** Keyring entry holding base64("API_KEY:API_SECRET"). */
 export const CREDENTIALS_SECRET_KEY = 'trading212-basic-auth';
 

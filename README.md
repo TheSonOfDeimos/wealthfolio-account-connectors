@@ -39,7 +39,7 @@ Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  c
 | [manifest.json](manifest.json) | Addon identity, sidebar entry, permissions, allowed hosts. |
 | [src/addon.tsx](src/addon.tsx) | Entry point: registers the route, captures the host context. |
 | [src/config.ts](src/config.ts) | Credentials, environment, page limit. |
-| [src/lib/](src/lib/) | `brokered-fetch` (sandbox egress), `credentials` (keyring), `mapper` + `symbols` (translation), `sync` (pipeline). |
+| [src/lib/](src/lib/) | `brokered-fetch` (sandbox egress), `credentials` (keyring), `mapper` (translation), `sync` (pipeline). |
 | [src/pages/](src/pages/) | The import page. |
 | [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only check against the real Trading 212 API. |
 
@@ -112,11 +112,11 @@ pnpm bundle        # trading212-import-0.1.0.zip
 - The only write is into Wealthfolio, behind the preview and an explicit click.
 - Symbols come from Trading 212's instrument catalogue
   (`GET /equity/metadata/instruments`), not from parsing the ticker — its
-  format is undocumented. Instruments missing from the catalogue (delisted
-  names still in your history) fall back to a ticker heuristic and are flagged
-  in the preview; correct those with `SYMBOL_OVERRIDES` in
-  [src/lib/symbols.ts](src/lib/symbols.ts). The ISIN travels in each activity's
-  comment so a wrong symbol stays traceable.
+  format is undocumented. An instrument missing from the catalogue (a delisted
+  name still in your history) keeps its raw Trading 212 ticker, which
+  Wealthfolio will reject visibly; fix those with `SYMBOL_OVERRIDES` in
+  [src/config.ts](src/config.ts). The ISIN travels in each activity's comment
+  so a wrong symbol stays traceable.
 - **Open question — trade currency.** The mapper labels each row with the
   wallet currency while taking `unitPrice` from `fill.price`, which may be
   quoted in the instrument's currency. If so, a US stock bought in a GBP
