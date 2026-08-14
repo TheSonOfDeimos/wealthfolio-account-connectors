@@ -107,29 +107,27 @@ Two differences from the desktop app:
 
 - Credentials land in an encrypted file inside the container volume (keyed by
   `WF_SECRET_KEY`), not your OS keyring.
-- Addon dev mode is compiled out of release builds, so `pnpm dev:server` hot
-  reload does **not** reach this instance. Rebuild and reinstall the zip.
+- Addon dev mode is compiled out of release builds, so there is no hot reload
+  against this instance. Rebuild and reinstall the zip.
 
 The compose file binds to `127.0.0.1` and disables auth, which is safe only
 because nothing off this machine can reach it. Don't expose it without setting
 up authentication — see [upstream compose.yml](https://github.com/wealthfolio/wealthfolio/blob/main/compose.yml)
 for the password-hash and OIDC options.
 
-## Running inside Wealthfolio
-
-```bash
-pnpm dev:server    # serves the addon on http://localhost:3001
-
-# in a clone of wealthfolio/wealthfolio:
-VITE_ENABLE_ADDON_DEV_MODE=true pnpm tauri dev
-```
-
-Wealthfolio auto-discovers the dev server and the addon appears in the sidebar
-as **Trading 212**. For a distributable package:
+## The development loop
 
 ```bash
 pnpm bundle        # trading212-import-0.1.0.zip
 ```
+
+Then reinstall through Settings → Addons → **+**, and the addon appears in the
+sidebar as **Trading 212**.
+
+Wealthfolio does have a hot-reload dev server, but it only works against a
+Wealthfolio built from source — release builds compile the feature out — so
+this repo does not carry it. For mapper changes `pnpm smoke:live` is the faster
+loop anyway: same mapping code, real data, no install step.
 
 ## Safety notes
 

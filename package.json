@@ -7,8 +7,6 @@
   "main": "dist/addon.js",
   "scripts": {
     "build": "vite build",
-    "dev": "vite build --watch",
-    "dev:server": "wealthfolio-addon dev",
     "clean": "rm -rf dist *.zip",
     "package": "zip -r trading212-import-$npm_package_version.zip manifest.json dist/ README.md -x '*.map'",
     "bundle": "pnpm clean && pnpm build && pnpm package",
@@ -29,7 +27,6 @@
     "@types/react": "^19.2.13",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.4",
-    "@wealthfolio/addon-dev-tools": "^3.6.2",
     "@wealthfolio/addon-sdk": "^3.6.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

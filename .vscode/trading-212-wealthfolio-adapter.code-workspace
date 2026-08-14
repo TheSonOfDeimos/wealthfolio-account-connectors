@@ -86,23 +86,6 @@
           "clear": false
         }
       },
-      {
-        "label": "Addon: dev server (hot reload)",
-        "type": "shell",
-        "command": "pnpm",
-        "args": ["dev:server"],
-        "options": {
-          "cwd": "${workspaceFolder}"
-        },
-        "isBackground": true,
-        "problemMatcher": [],
-        "presentation": {
-          "echo": true,
-          "reveal": "always",
-          "panel": "dedicated",
-          "clear": false
-        }
-      },
 
       // ===== Smoke test (hits the LIVE Trading 212 API, read-only) =====
       {
