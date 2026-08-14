@@ -42,6 +42,8 @@ Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  c
 | [src/lib/](src/lib/) | `brokered-fetch` (sandbox egress), `credentials` (keyring), `mapper` (translation), `sync` (pipeline). |
 | [src/pages/](src/pages/) | The import page. |
 | [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only check against the real Trading 212 API. |
+| [compose.yml](compose.yml) | A local Wealthfolio instance for testing the addon. |
+| [.vscode/](.vscode/) | Workspace with tasks and debug configs. |
 
 ## Setup
 
@@ -83,6 +85,35 @@ pnpm smoke:live
 Performs the same two reads the addon performs, maps them with the same mapper,
 and prints what would be imported. Nothing is written; Wealthfolio is not
 involved. It also prints a currency check — see the note below.
+
+## A Wealthfolio instance in Docker
+
+Wealthfolio publishes a server build that runs the *same* addon host as the
+desktop app — verified: `POST /api/v1/addons/<id>/network/request` is served by
+the same handler, so the network broker this addon depends on is present.
+
+```bash
+cp .env.docker.example .env.docker
+echo "WF_SECRET_KEY=$(openssl rand -base64 32)" >> .env.docker
+docker compose --env-file .env.docker up -d
+open http://127.0.0.1:8088
+```
+
+Then install `trading212-import-0.1.0.zip` through Settings → Addons → **+**.
+The file picker reads from your machine, not the container, so nothing needs
+mounting.
+
+Two differences from the desktop app:
+
+- Credentials land in an encrypted file inside the container volume (keyed by
+  `WF_SECRET_KEY`), not your OS keyring.
+- Addon dev mode is compiled out of release builds, so `pnpm dev:server` hot
+  reload does **not** reach this instance. Rebuild and reinstall the zip.
+
+The compose file binds to `127.0.0.1` and disables auth, which is safe only
+because nothing off this machine can reach it. Don't expose it without setting
+up authentication — see [upstream compose.yml](https://github.com/wealthfolio/wealthfolio/blob/main/compose.yml)
+for the password-hash and OIDC options.
 
 ## Running inside Wealthfolio
 

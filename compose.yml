@@ -1,0 +1,56 @@
+# A throwaway Wealthfolio instance for testing this addon.
+#
+#   cp .env.docker.example .env.docker   # then follow the note inside
+#   docker compose --env-file .env.docker up -d
+#   open http://127.0.0.1:8088
+#
+# This runs Wealthfolio's official server build, which implements the same
+# addon host as the desktop app — including the network broker that this addon
+# depends on. Two differences from desktop worth knowing:
+#
+#   • Secrets live in an encrypted file in the container volume, keyed by
+#     WF_SECRET_KEY, not in your OS keyring.
+#   • Addon dev mode is compiled out of release builds, so `pnpm dev:server`
+#     hot reload does NOT work here. Install the zip from `pnpm bundle`.
+#
+# Deliberately local-only: the port binds to 127.0.0.1 and authentication is
+# disabled, which is safe precisely because nothing outside this machine can
+# reach it. Do not publish this on 0.0.0.0 without setting up auth first —
+# see the upstream compose.yml for the OIDC and password-hash options.
+
+services:
+  wealthfolio:
+    # Pinned to match `minWealthfolioVersion` in manifest.json. Use `latest`
+    # only when you want to find out what a newer host does to the addon.
+    image: wealthfolio/wealthfolio:3.6.3
+    container_name: wealthfolio-test
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WF_PORT:-8088}:8088"
+    volumes:
+      - wealthfolio-test-data:/data
+    environment:
+      WF_LISTEN_ADDR: "0.0.0.0:8088"
+      WF_DB_PATH: "/data/wealthfolio.db"
+      # Encrypts the secret store that holds your Trading 212 key pair.
+      # Generate with: openssl rand -base64 32
+      WF_SECRET_KEY: "${WF_SECRET_KEY:?Set WF_SECRET_KEY in .env.docker}"
+      # Safe only because the port above is bound to localhost.
+      WF_AUTH_REQUIRED: "false"
+      WF_REQUEST_TIMEOUT_MS: "30000"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8088/api/v1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+
+volumes:
+  wealthfolio-test-data:
+    driver: local

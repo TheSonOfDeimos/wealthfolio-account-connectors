@@ -5,5 +5,7 @@ dist/
 
 # Credentials — never commit these
 .env
+.env.docker
 .env.local
 .env.*.local
+.DS_Store

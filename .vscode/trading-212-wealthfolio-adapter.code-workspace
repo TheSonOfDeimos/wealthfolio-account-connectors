@@ -1,0 +1,240 @@
+{
+  "folders": [
+    {
+      "path": "..",
+      "name": "trading-212-wealthfolio-adapter"
+    }
+  ],
+  "settings": {
+    // ===== VS Code core =====
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/*.zip": true
+    },
+    "workbench.editorAssociations": {
+      "*.md": "vscode.markdown.preview.editor"
+    },
+    "files.exclude": {
+      "**/.DS_Store": true
+    },
+
+    // ===== TypeScript =====
+    // Use the workspace compiler, so the editor and `pnpm type-check` agree.
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "typescript.preferences.importModuleSpecifier": "relative",
+    "[typescript]": {
+      "editor.formatOnSave": true
+    },
+    "[typescriptreact]": {
+      "editor.formatOnSave": true
+    }
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      // ===== Addon =====
+      {
+        "label": "Addon: build",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["build"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "group": {
+          "kind": "build",
+          "isDefault": true
+        },
+        "problemMatcher": ["$tsc"],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+      {
+        "label": "Addon: type-check",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["type-check"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": ["$tsc"],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+      {
+        "label": "Addon: bundle (zip)",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["bundle"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": ["$tsc"],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+      {
+        "label": "Addon: dev server (hot reload)",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["dev:server"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "isBackground": true,
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+
+      // ===== Smoke test (hits the LIVE Trading 212 API, read-only) =====
+      {
+        "label": "Addon: smoke test (live)",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["smoke:live"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "group": {
+          "kind": "test",
+          "isDefault": true
+        },
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": true
+        }
+      },
+
+      // ===== Wealthfolio test instance (Docker) =====
+      {
+        "label": "Wealthfolio: up",
+        "type": "shell",
+        "command": "docker",
+        "args": ["compose", "--env-file", ".env.docker", "up", "-d"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+      {
+        "label": "Wealthfolio: logs",
+        "type": "shell",
+        "command": "docker",
+        "args": ["compose", "--env-file", ".env.docker", "logs", "-f"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "isBackground": true,
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+      {
+        "label": "Wealthfolio: down",
+        "type": "shell",
+        "command": "docker",
+        "args": ["compose", "--env-file", ".env.docker", "down"],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+      {
+        "label": "Wealthfolio: open in browser",
+        "type": "shell",
+        "command": "open",
+        "args": ["http://127.0.0.1:8088"],
+        "windows": {
+          "command": "cmd",
+          "args": ["/c", "start", "http://127.0.0.1:8088"]
+        },
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "silent",
+          "panel": "dedicated",
+          "clear": false
+        }
+      }
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        // Breakpoints work in scripts/ and src/ — tsx emits source maps and
+        // Node maps them back to the TypeScript.
+        "name": "Smoke test (debug)",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder}/scripts/smoke-live.ts",
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "sourceMaps": true,
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
+      {
+        // Same, but stops on the first line so you can step from the top.
+        "name": "Smoke test (debug, break on entry)",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder}/scripts/smoke-live.ts",
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "stopOnEntry": true,
+        "sourceMaps": true,
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      }
+    ]
+  },
+  "extensions": {
+    "recommendations": [
+      "bradlc.vscode-tailwindcss",
+      "ms-azuretools.vscode-docker",
+      "bierner.markdown-mermaid"
+    ],
+    "unwantedRecommendations": []
+  }
+}
