@@ -1,61 +1,75 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { toMajorUnits } from './extract';
+import { SYMBOL_TABLE } from './symbol-table';
 import type { T212Asset, T212Dataset } from './extract';
 
 /**
- * Turning a Trading 212 ticker into a symbol Wealthfolio can resolve.
+ * What a Trading 212 ticker actually is.
  *
- * Three sources, in order of trust:
+ * Nothing here parses the ticker. Trading 212's ticker is an opaque id, and it
+ * only looks like it encodes the answer: `ABML_US_EQ` is ABAT, not ABML,
+ * because the company renamed and Trading 212 kept the original code. A rule
+ * that stripped the suffixes agreed with Trading 212 for 87.8% of instruments
+ * and silently mapped the rest to other companies — including, in a live
+ * account, pricing Ensign Energy Services as Element Solutions.
  *
- *  1. **An override you set**, stored in Wealthfolio's own per-account
- *     `symbolMappings`. Always wins.
- *  2. **The instrument catalogue's `shortName`** — correct by definition, but
- *     out of reach inside the addon: the catalogue is a 4 MB response and the
- *     host refuses anything that large through its network broker. Present only
- *     when something else supplied it, such as the smoke test.
- *  3. **A rule derived from the ticker itself.** Trading 212's ticker is an
- *     opaque, permanent id assigned at listing, and stripping its suffixes
- *     recovers the symbol for 15,282 of 17,400 instruments — 87.8%.
+ * So every value comes from a field Trading 212 states:
  *
- * The rule fails in one specific way, and it is worth knowing: when a company
- * renames, Trading 212 keeps the old ticker string and updates only
- * `shortName`. `TNP_US_EQ` is Tsakos, now trading as `TEN`; `ABML_US_EQ` is
- * American Battery Technology, now `ABAT`. Nothing in the ticker reveals this,
- * and Trading 212 reports no corporate action for it, so the rule cannot know.
- * That is what overrides are for.
+ *  1. **An override you set**, in Wealthfolio's per-account `symbolMappings`.
+ *  2. **The live catalogue**, when something has already fetched it — the smoke
+ *     test does, the addon cannot.
+ *  3. **`SYMBOL_TABLE`**, that same catalogue captured by
+ *     `pnpm symbols:generate`. The catalogue is 4.2 MB in one response, over
+ *     the addon network broker's limit, and the endpoint ignores every filter
+ *     parameter, so the answer is bundled rather than fetched.
+ *
+ * A ticker in none of them is **unknown**, and is reported as such. The raw
+ * ticker is passed through so Wealthfolio fails to resolve it visibly, which is
+ * the point: a loud failure beats a plausible wrong answer.
  */
 
-/** Suffixes Trading 212 appends for the listing country. */
-const COUNTRY_SUFFIX =
-  /_(US|CA|GB|DE|FR|NL|BE|PT|IT|ES|CH|AT|IE|SE|NO|DK|FI|PL)$/;
-
-export function deriveSymbol(ticker: string): string {
-  let symbol = ticker.replace(/_EQ$/, '');
-  if (COUNTRY_SUFFIX.test(symbol)) {
-    symbol = symbol.replace(COUNTRY_SUFFIX, '');
-  } else {
-    // European listings carry a single lowercase exchange letter instead —
-    // `TGAl_EQ` on London, `MTa_EQ` on Amsterdam.
-    symbol = symbol.replace(/[a-z]$/, '');
-  }
-  return symbol;
-}
 
 /**
  * Resolve one ticker, preferring an override, then the catalogue, then the rule.
  */
+export type SymbolSource =
+  /** You set it. */
+  | 'override'
+  /** Trading 212's live catalogue, when something has fetched it. */
+  | 'catalogue'
+  /** The captured catalogue bundled with the addon. */
+  | 'table'
+  /**
+   * Found by searching Wealthfolio's market data for the instrument *name*
+   * Trading 212 gave — the fallback for a listing newer than the table.
+   */
+  | 'searched'
+  /** Nothing knows it. Reported, never guessed. */
+  | 'unknown';
+
 export function resolveSymbol(
   ticker: string,
   asset: T212Asset | undefined,
   overrides: Record<string, string>,
-): { symbol: string; source: 'override' | 'catalogue' | 'derived' } {
+  /** Symbols found by search this run, kept apart so they are not mistaken
+   *  for corrections you made. */
+  searched: Record<string, string> = {},
+): { symbol: string; source: SymbolSource } {
   const override = overrides[ticker]?.trim();
   if (override) return { symbol: override, source: 'override' };
+
+  const found = searched[ticker]?.trim();
+  if (found) return { symbol: found, source: 'searched' };
 
   const catalogued = asset?.shortName?.trim();
   if (catalogued) return { symbol: catalogued, source: 'catalogue' };
 
-  return { symbol: deriveSymbol(ticker), source: 'derived' };
+  const entry = SYMBOL_TABLE[ticker];
+  if (entry) return { symbol: entry.split('|')[0]!, source: 'table' };
+
+  // Not a guess — the raw ticker, so the failure is Wealthfolio's to report
+  // rather than ours to hide.
+  return { symbol: ticker, source: 'unknown' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,9 +177,12 @@ export interface SymbolReview {
   /** What Wealthfolio thinks it is. A disagreement here is the tell. */
   resolvedName?: string;
   symbol: string;
-  source: 'override' | 'catalogue' | 'derived';
+  source: SymbolSource;
   status: SymbolStatus;
   quantity?: number;
+  /** The venue we told Wealthfolio to look on, and the one it settled on. */
+  exchangeMic?: string;
+  resolvedExchange?: string;
   /** Trading 212's price, in the major units Wealthfolio stores. */
   brokerPrice?: number;
   wealthfolioPrice?: number;
@@ -187,9 +204,13 @@ export async function reviewSymbols(
   dataset: T212Dataset,
   assets: Map<string, T212Asset>,
   overrides: Record<string, string>,
+  searched: Record<string, string> = {},
 ): Promise<SymbolReview[]> {
   const holdings = await ctx.api.portfolio.getHoldings(accountId);
-  const held = new Map<string, { price: number; name?: string; currency?: string }>();
+  const held = new Map<
+    string,
+    { price: number; name?: string; currency?: string; exchange?: string }
+  >();
   for (const holding of holdings) {
     const symbol = holding.instrument?.symbol;
     if (!symbol) continue;
@@ -197,6 +218,10 @@ export async function reviewSymbols(
       price: holding.price ?? 0,
       name: holding.instrument?.name ?? undefined,
       currency: holding.instrument?.currency,
+      // The response carries `exchangeMic` on the instrument; the SDK's
+      // `Instrument` type does not declare it. Read it defensively rather than
+      // trust either side outright.
+      exchange: (holding.instrument as { exchangeMic?: string } | null | undefined)?.exchangeMic,
     });
   }
 
@@ -204,7 +229,7 @@ export async function reviewSymbols(
   for (const position of dataset.positions) {
     const ticker = position.instrument.ticker;
     const asset = assets.get(ticker);
-    const { symbol, source } = resolveSymbol(ticker, asset, overrides);
+    const { symbol, source } = resolveSymbol(ticker, asset, overrides, searched);
     const holding = held.get(symbol);
 
     // Trading 212 quotes some listings in pence; Wealthfolio stores them in
@@ -236,6 +261,8 @@ export async function reviewSymbols(
       source,
       status,
       quantity: position.quantity,
+      exchangeMic: exchangeMicFor(ticker),
+      resolvedExchange: holding?.exchange,
       brokerPrice: broker?.majorValue,
       wealthfolioPrice: holding?.price,
       currency: broker?.majorCurrency,
@@ -254,52 +281,71 @@ export async function reviewSymbols(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The venue a Trading 212 ticker trades on, from its suffix.
+ * The venue Trading 212 lists an instrument on, as a market identifier code.
  *
- * Needed for the same reason `deriveSymbol` is: the instrument-to-exchange link
- * lives in `TradableInstrument.workingScheduleId`, and the catalogue that
- * carries it is too large for the addon to fetch. Without a venue the host
- * guesses, and guesses badly — every London ETF was looked up on Deutsche Börse
- * and came back unpriced.
- *
- * Measured against the whole catalogue: 9,788 correct against 622 wrong, 94%.
- * On the holdings of the account this was built for, 25 of 25 with none wrong.
- *
- * US listings are deliberately left without one. `_US_EQ` covers NYSE, NASDAQ
- * and OTC Markets with no way to tell them apart — the suffix picks the right
- * one only 46% of the time — and US symbols resolve perfectly well with no
- * venue at all. A guess there would replace something that works with something
- * that works half the time.
+ * Read from `SYMBOL_TABLE`, where it was captured from the exchange Trading 212
+ * links each instrument to through `workingScheduleId`. Undefined means either
+ * an unknown ticker or a venue with no MIC — over-the-counter chiefly — and in
+ * both cases nothing is sent, because a wrong venue sends the lookup somewhere
+ * the instrument is not.
  */
-const EXCHANGE_BY_SUFFIX: Record<string, string> = {
-  l: 'XLON',
-  d: 'XETR',
-  p: 'XPAR',
-  s: 'XSWX',
-  m: 'XMIL',
-  a: 'XAMS',
-  e: 'XMAD',
-  CA: 'XTSE',
-  BE: 'XBRU',
-  AT: 'XWBO',
-  PT: 'XLIS',
-  IE: 'XLON',
-  DE: 'XETR',
-  FR: 'XPAR',
-  NL: 'XAMS',
-  ES: 'XMAD',
-  IT: 'XMIL',
-  CH: 'XSWX',
-};
+export function exchangeMicFor(ticker: string): string | undefined {
+  const entry = SYMBOL_TABLE[ticker];
+  if (!entry) return undefined;
+  const [, mic] = entry.split('|');
+  return mic || undefined;
+}
 
-export function deriveExchangeMic(ticker: string): string | undefined {
-  const body = ticker.replace(/_EQ$/, '');
+/**
+ * Resolve tickers the bundled table has never heard of.
+ *
+ * The table is captured at build time, so anything Trading 212 lists afterwards
+ * is unknown to it — and an addon that needs a release to recognise a new
+ * holding would be a poor thing. Trading 212 does state the instrument's
+ * `name` on every order and position, though, and Wealthfolio's own market-data
+ * search resolves that reliably: on the seven renamed holdings that defeated
+ * every other approach, searching the name returned the right symbol seven
+ * times out of seven.
+ *
+ * The result is still someone else's opinion rather than Trading 212's, so it
+ * is marked `searched` and shown for confirmation instead of being trusted
+ * silently. Nothing is parsed out of the ticker at any point.
+ */
+export async function resolveUnknownSymbols(
+  ctx: AddonContext,
+  tickers: { ticker: string; name?: string }[],
+  log: (level: 'info' | 'warn', message: string) => void,
+): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
 
-  const country = body.match(/_([A-Z]{2})$/);
-  if (country) return EXCHANGE_BY_SUFFIX[country[1]!];
+  for (const { ticker, name } of tickers) {
+    if (!name?.trim()) {
+      log('warn', `${ticker}: unknown to the bundled table and Trading 212 gave no name to search.`);
+      continue;
+    }
 
-  // A trailing lowercase letter, optionally followed by a disambiguating
-  // digit: `TGAl_EQ`, `V6Cd1_EQ`.
-  const letter = body.match(/([a-z]+)[0-9]*$/);
-  return letter ? EXCHANGE_BY_SUFFIX[letter[1]!] : undefined;
+    try {
+      const results = await ctx.api.market.searchTicker(name.trim());
+      const best = results[0];
+      if (!best) {
+        log('warn', `${ticker}: "${name}" matched nothing in Wealthfolio's market data.`);
+        continue;
+      }
+      const symbol = best.canonicalSymbol ?? best.symbol;
+      found[ticker] = symbol;
+      log(
+        'info',
+        `${ticker}: not in the bundled table, resolved "${name}" to ${symbol} ` +
+          `(${best.longName || best.shortName}) by search. Confirm it under Symbols.`,
+      );
+    } catch (error) {
+      log('warn', `${ticker}: search for "${name}" failed (${describe(error)}).`);
+    }
+  }
+
+  return found;
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

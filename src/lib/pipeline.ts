@@ -5,7 +5,7 @@ import { buildAssetIndex, createRawGet, extractAll } from './extract';
 import type { T212Dataset, T212Source } from './extract';
 import { activityKeyOf, mapDataset } from './mapper';
 import type { MappingIssue } from './mapper';
-import { loadOverrides, reviewSymbols } from './symbols';
+import { loadOverrides, resolveSymbol, resolveUnknownSymbols, reviewSymbols } from './symbols';
 import type { SymbolReview } from './symbols';
 import { T212 } from 't212-sdk';
 
@@ -147,7 +147,21 @@ export async function runSync(
   if (Object.keys(overrides).length > 0) {
     log('info', `${Object.keys(overrides).length} symbol override(s) applied.`);
   }
-  const { activities, issues } = mapDataset(dataset, accountId, assets, overrides);
+  // Anything the bundled table has never seen — a listing newer than the last
+  // `pnpm symbols:generate` — is looked up by the name Trading 212 gave it,
+  // rather than left unresolvable until the next release.
+  const searched: Record<string, string> = {};
+  const unknown = [...assets.values()]
+    .filter((asset) => resolveSymbol(asset.ticker, asset, overrides).source === 'unknown')
+    .map((asset) => ({ ticker: asset.ticker, name: asset.name }));
+
+  if (unknown.length > 0) {
+    progress({ phase: 'Mapping', message: `Looking up ${unknown.length} unrecognised instrument(s)…` });
+    log('info', `${unknown.length} ticker(s) are newer than the bundled symbol table.`);
+    Object.assign(searched, await resolveUnknownSymbols(ctx, unknown, log));
+  }
+
+  const { activities, issues } = mapDataset(dataset, accountId, assets, overrides, searched);
   log('info', `Mapped ${activities.length} activities.`);
   for (const issue of issues.slice(0, 50)) {
     log(issue.kind === 'skipped' ? 'info' : 'warn', issue.message);
@@ -229,10 +243,11 @@ export async function runSync(
 
   progress({ phase: 'Recalculating', message: 'Asking Wealthfolio to revalue the portfolio…' });
   await ctx.api.portfolio.recalculate();
+  await settle(ctx, accountId, progress);
 
   // Read back what Wealthfolio made of the symbols, so the UI can point at the
   // ones worth a second look rather than making you hunt for them.
-  const review = await reviewSymbols(ctx, accountId, dataset, assets, overrides);
+  const review = await reviewSymbols(ctx, accountId, dataset, assets, overrides, searched);
   const needsAttention = review.filter((row) => row.status !== 'ok');
   if (needsAttention.length > 0) {
     log('warn', `${needsAttention.length} holding(s) need a symbol check — see Symbols below.`);
@@ -240,6 +255,35 @@ export async function runSync(
   log('success', 'Done.');
 
   return { mode, imported, duplicates, deleted, invalid, issues, dataset, review };
+}
+
+/**
+ * Wait until the portfolio stops changing.
+ *
+ * `recalculate` returns as soon as the work is queued, and holdings appear
+ * gradually as each asset is priced. Reviewing symbols before that finishes
+ * reports healthy holdings as missing — which it did, flagging instruments that
+ * had imported perfectly well.
+ */
+async function settle(
+  ctx: AddonContext,
+  accountId: string,
+  progress: Reporter['progress'],
+): Promise<void> {
+  let previous = -1;
+  let unchanged = 0;
+
+  for (let attempt = 0; attempt < 60 && unchanged < 3; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    const holdings = await ctx.api.portfolio.getHoldings(accountId);
+    const count = holdings.length;
+    unchanged = count === previous && count > 0 ? unchanged + 1 : 0;
+    previous = count;
+    progress({
+      phase: 'Recalculating',
+      message: `${count} holdings valued…`,
+    });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

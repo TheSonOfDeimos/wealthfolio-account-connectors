@@ -14,7 +14,8 @@
     "smoke:live": "tsx scripts/smoke-live.ts",
     "reconcile": "tsx scripts/reconcile-docker.ts",
     "verify": "pnpm type-check && pnpm build",
-    "dev:deploy": "tsx scripts/dev-deploy.ts"
+    "dev:deploy": "tsx scripts/dev-deploy.ts",
+    "symbols:generate": "tsx scripts/generate-symbol-table.ts"
   },
   "dependencies": {
     "t212-sdk": "0.3.2"

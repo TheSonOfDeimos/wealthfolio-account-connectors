@@ -629,10 +629,15 @@ export function findDuplicateSourceIds(events: T212Event[]): Map<string, number>
  * `currentPrice x quantity` is exactly 100x the value Trading 212 reports.
  */
 const MINOR_UNIT_CURRENCIES: Record<string, { major: string; per: number }> = {
+  // Both verified against Trading 212's own figures: every GBX position's
+  // `currentPrice x quantity` is exactly 100x the value it reports, and it
+  // states `fxRate: 100` on the matching fills.
   GBX: { major: 'GBP', per: 100 },
   GBp: { major: 'GBP', per: 100 },
-  ZAc: { major: 'ZAR', per: 100 },
-  ILA: { major: 'ILS', per: 100 },
+  // Other minor-unit currencies exist — ZAc, ILA — but this account has never
+  // held one, so the factor is unconfirmed and none is assumed. An unlisted
+  // currency simply compares as cross-currency, where the check abstains
+  // instead of returning a verdict it cannot support.
 };
 
 export interface T212Price {

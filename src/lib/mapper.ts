@@ -1,7 +1,7 @@
 import type { ActivityImport, ActivityType } from '@wealthfolio/addon-sdk';
 import type { Fill, HistoryDividendItem, Order, Tax, TaxName } from 't212-sdk';
 import { EXCHANGE_MIC } from '../config';
-import { deriveExchangeMic, resolveSymbol } from './symbols';
+import { exchangeMicFor, resolveSymbol } from './symbols';
 import { isKnownTransactionType, toEvents } from './extract';
 import type { T212Asset, T212Dataset, T212Event, T212Transaction } from './extract';
 
@@ -66,8 +66,8 @@ const FEE_CHARGES: string[] = [
  * a cash holding, and the response echoes the symbol back as empty, confirming
  * it was understood as cash rather than as a security by that name.
  */
-function cashSymbol(currency: string | undefined): string {
-  return `$CASH-${currency ?? 'GBP'}`;
+function cashSymbol(currency: string): string {
+  return `$CASH-${currency}`;
 }
 
 /**
@@ -143,6 +143,8 @@ export function mapDataset(
   assets: Map<string, T212Asset>,
   /** Ticker → symbol corrections, from Wealthfolio's own per-account store. */
   overrides: Record<string, string> = {},
+  /** Symbols found by searching this run, for tickers the table lacks. */
+  searched: Record<string, string> = {},
 ): MapResult {
   const activities: ActivityImport[] = [];
   const issues: MappingIssue[] = [];
@@ -158,7 +160,7 @@ export function mapDataset(
   // uncatalogued ticker would otherwise bury every other issue.
   const symbolWarned = new Set<string>();
   const splits = pairSplits(dataset, warn);
-  const context = { accountId, assets, warn, symbolWarned, splits, overrides };
+  const context = { accountId, assets, warn, symbolWarned, splits, overrides, searched };
 
   for (const event of events) {
     const line = activities.length + 1;
@@ -197,6 +199,7 @@ interface Context {
   symbolWarned: Set<string>;
   splits: Map<string, SplitPair>;
   overrides: Record<string, string>;
+  searched: Record<string, string>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,13 +340,19 @@ function mapOrder(
   if (!currency) {
     context.warn(`${ticker} (order ${order.id}): no quote currency, so the row was left unlabelled.`);
   }
-  if (!order.side) {
-    context.warn(`${ticker} (order ${order.id}): no side reported, treated as a BUY.`);
+  if (order.side !== 'BUY' && order.side !== 'SELL') {
+    // Guessing the direction of a trade would be the worst possible assumption
+    // to make quietly: a buy recorded as a sell inverts the position.
+    context.warn(
+      `${ticker} (order ${order.id}): Trading 212 reported no side, so the trade was skipped ` +
+        'rather than guessed. Enter it by hand.',
+    );
+    return [];
   }
 
   const trade: ActivityImport = {
     ...base(context.accountId, event, line),
-    activityType: order.side === 'SELL' ? 'SELL' : 'BUY',
+    activityType: order.side,
     symbol,
     symbolName: order.instrument?.name,
     quantity,
@@ -542,12 +551,11 @@ function hostFxRate(_currency: string | undefined, t212Rate: number | undefined)
  * the lookup somewhere the instrument certainly is not.
  */
 function micFor(ticker: string, asset: T212Asset | undefined): string | undefined {
-  // The catalogue knows the venue outright when it is available.
+  // The live catalogue when something fetched it, otherwise the captured one.
+  // Both are Trading 212's own answer; neither is inferred from the ticker.
   const name = asset?.exchange?.name;
   if (name) return EXCHANGE_MIC[name] || undefined;
-
-  // Inside the addon it is not, so fall back to the ticker's own suffix.
-  return deriveExchangeMic(ticker);
+  return exchangeMicFor(ticker);
 }
 
 /**
@@ -558,13 +566,19 @@ function micFor(ticker: string, asset: T212Asset | undefined): string | undefine
  * without anything failing.
  */
 function symbolFor(ticker: string, context: Context): string {
-  const { symbol, source } = resolveSymbol(ticker, context.assets.get(ticker), context.overrides);
+  const { symbol, source } = resolveSymbol(
+    ticker,
+    context.assets.get(ticker),
+    context.overrides,
+    context.searched,
+  );
 
-  if (source === 'derived' && !context.symbolWarned.has(ticker)) {
+  if (source === 'unknown' && !context.symbolWarned.has(ticker)) {
     context.symbolWarned.add(ticker);
     context.warn(
-      `${ticker}: symbol "${symbol}" was derived from the ticker, not looked up. ` +
-        'Check it under Symbols after the import and set an override if it is wrong.',
+      `${ticker}: Trading 212's catalogue has no entry for this ticker, so no symbol is known ` +
+        'for it. Run `pnpm symbols:generate` to refresh the table, or set the symbol under ' +
+        'Symbols. The raw ticker was sent, which Wealthfolio will reject rather than mis-resolve.',
     );
   }
 

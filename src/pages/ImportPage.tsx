@@ -672,6 +672,7 @@ function Symbols({
                 <th className="py-2 pr-3 font-medium">Trading 212</th>
                 <th className="py-2 pr-3 font-medium">Instrument</th>
                 <th className="py-2 pr-3 font-medium">Symbol used</th>
+                <th className="py-2 pr-3 font-medium">Exchange</th>
                 <th className="py-2 pr-3 font-medium">Status</th>
                 <th className="py-2 font-medium">Correct it</th>
               </tr>
@@ -690,7 +691,20 @@ function Symbols({
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs">
                     {row.symbol}
-                    <span className="ml-1.5 text-muted-foreground">({row.source})</span>
+                    <span
+                      className={
+                        'ml-1.5 ' +
+                        (row.source === 'searched' ? 'text-amber-700' : 'text-muted-foreground')
+                      }
+                    >
+                      ({row.source})
+                    </span>
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-xs">
+                    {row.resolvedExchange ?? row.exchangeMic ?? '—'}
+                    {row.resolvedExchange && row.exchangeMic && row.resolvedExchange !== row.exchangeMic ? (
+                      <span className="block text-muted-foreground">sent {row.exchangeMic}</span>
+                    ) : null}
                   </td>
                   <td className="py-2 pr-3">
                     <StatusChip status={row.status} />
