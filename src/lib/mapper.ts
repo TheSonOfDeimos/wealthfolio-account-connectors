@@ -53,6 +53,26 @@ const FEE_CHARGES: string[] = [
 ] satisfies TaxName[];
 
 /**
+ * Trading 212's currency code as Wealthfolio spells it.
+ *
+ * The two name pence differently — `GBX` against `GBp` — and the host only
+ * handles its own spelling. Given `GBX` it converts inconsistently: a trade
+ * settled at £233.76 stored a base of 233.76 beside a local of 2.3376, which
+ * is what produced book values a hundredth of their true size and returns in
+ * the thousands of percent. With `GBp` both figures land on 233.76.
+ *
+ * This is a translation between two names for one currency, established by
+ * writing the same trade five ways and reading back which survived — not an
+ * inference about the instrument.
+ */
+const CURRENCY_ALIASES: Record<string, string> = { GBX: 'GBp' };
+
+function hostCurrency(currency: string | undefined): string | undefined {
+  if (!currency) return undefined;
+  return CURRENCY_ALIASES[currency] ?? currency;
+}
+
+/**
  * The symbol a cash movement carries.
  *
  * Wealthfolio's `ActivityImport` types `symbol` as optional, and its backend
@@ -299,7 +319,17 @@ function mapSplit(
       symbolName: pair.order.instrument?.name,
       // Wealthfolio takes the ratio here; `quantity` is refused.
       amount: ratio,
-      currency: context.assets.get(pair.ticker)?.currency ?? pair.order.instrument?.currency,
+      // The instrument's own currency and venue, for the same reason dividends
+      // carry them: a row naming only the symbol creates a second asset rather
+      // than attaching to the security it splits.
+      currency: hostCurrency(
+        context.assets.get(pair.ticker)?.currency ?? pair.order.instrument?.currency,
+      ),
+      quoteCcy: hostCurrency(
+        context.assets.get(pair.ticker)?.currency ?? pair.order.instrument?.currency,
+      ),
+      exchangeMic: micFor(pair.ticker, context.assets.get(pair.ticker)),
+      instrumentType: context.assets.get(pair.ticker)?.type,
       comment:
         `${event.sourceId} split=${ratio}:1 removed=${removed}@${pair.removed.price} ` +
         `added=${added}@${pair.added.price} ticker=${pair.ticker}`,
@@ -357,10 +387,9 @@ function mapOrder(
     symbolName: order.instrument?.name,
     quantity,
     unitPrice: fill.price,
-    currency,
-    // The quote currency, carried as a hint for asset resolution. It does not
-    // trigger any conversion on the import path — `fxRate` does that.
-    quoteCcy: currency,
+    currency: hostCurrency(currency),
+    // The same code, so the asset and the activity agree on the currency.
+    quoteCcy: hostCurrency(currency),
     instrumentType: asset?.type,
     // Without this the host guesses the venue from the bare symbol, and guesses
     // wrong — a London ETF was looked up on Deutsche Börse and not found.
@@ -399,7 +428,7 @@ function mapCharges(
       ...base(context.accountId, event, line),
       activityType: TAX_CHARGES.includes(charge.name) ? 'TAX' : 'FEE',
       amount,
-      currency: charge.currency,
+      currency: hostCurrency(charge.currency),
       symbol: cashSymbol(charge.currency),
       // The charge's own timestamp, which can differ from the fill's by
       // minutes. Trading 212 treats them as distinct events; so do we.
@@ -425,6 +454,13 @@ function mapDividend(
 ): ActivityImport[] {
   const item: HistoryDividendItem = event.record;
   const ticker = item.instrument?.ticker ?? item.ticker;
+  const asset = context.assets.get(ticker);
+  // The instrument's own currency and venue, not the wallet's. A dividend that
+  // names only the symbol creates a *second* asset — same ticker, wallet
+  // currency, no exchange — which no market-data provider can resolve. That
+  // left seventeen assets failing quote sync against a fallback provider,
+  // while the real ones priced fine beside them.
+  const quoteCcy = asset?.currency ?? item.instrument?.currency;
 
   // `amount` is what reached the wallet: net of withholding tax *and* of a
   // currency conversion, with no rate reported and `tickerCurrency` absent from
@@ -438,7 +474,13 @@ function mapDividend(
       symbol: symbolFor(ticker, context),
       symbolName: item.instrument?.name,
       amount: item.amount,
-      currency: item.currency,
+      // The cash that arrived, in the wallet's currency…
+      currency: hostCurrency(item.currency),
+      // …while the asset it belongs to keeps the instrument's own, so the
+      // dividend attaches to the security rather than inventing another.
+      quoteCcy: hostCurrency(quoteCcy),
+      exchangeMic: micFor(ticker, asset),
+      instrumentType: asset?.type,
       comment:
         `${event.sourceId} ticker=${ticker} grossPerShare=${item.grossAmountPerShare} ` +
         `qty=${item.quantity} type=${item.type}`,
@@ -508,7 +550,7 @@ function mapTransaction(
       ...base(context.accountId, event, line),
       activityType,
       amount,
-      currency: item.currency,
+      currency: hostCurrency(item.currency),
       symbol: cashSymbol(item.currency),
       comment: `${event.sourceId} type=${item.type}`,
     },
