@@ -2,7 +2,7 @@ import type { ActivityImport, ActivityType } from '@wealthfolio/addon-sdk';
 import type { Fill, HistoryDividendItem, Order, Tax, TaxName } from 't212-sdk';
 import { EXCHANGE_MIC } from '../config';
 import { exchangeMicFor, resolveSymbol } from './symbols';
-import { isKnownTransactionType, toEvents } from './extract';
+import { isKnownTransactionType, toEvents, toMajorUnits } from './extract';
 import type { T212Asset, T212Dataset, T212Event, T212Transaction } from './extract';
 
 /**
@@ -536,24 +536,30 @@ function base(accountId: string, event: T212Event, line: number) {
  * Convert Trading 212's rate to Wealthfolio's convention.
  *
  * Trading 212 divides by its rate to reach the wallet currency; Wealthfolio
- * multiplies. The reciprocal expresses the same rate in the other convention —
- * it converts nothing that was not already converted.
+ * multiplies. The reciprocal expresses the same rate the other way round.
  *
- * One rule covers minor units too, and must. Trading 212 reports `fxRate: 100`
- * for a pence instrument in a sterling account, treating the unit change as an
- * exchange rate, so the reciprocal 0.01 turns 9,678 GBX into the £96.78 that
- * actually left the wallet.
+ * Minor units need one further correction, because the host performs part of
+ * the conversion itself. A row written through `saveMany` carries its currency
+ * inside an asset descriptor, and the host normalises `GBX` to pounds on the
+ * way in — so the pence-to-pounds factor Trading 212 folded into its `fxRate`
+ * has already been applied by the time our rate is used, and passing the plain
+ * reciprocal divides by a hundred twice. It showed up as a cost basis of
+ * £0.0106 against a market value of £162, and return percentages in the
+ * millions.
  *
- * An earlier version special-cased pence to `1`, on the strength of watching
- * the host normalise `GBX` by itself. It does — but only on `activities.create`,
- * where the currency arrives inside an asset. The import path this addon uses
- * takes the row's currency at face value, so a rate of 1 charged every London
- * trade a hundred times over: an account whose cash should have been £182 came
- * out at minus £270,749.
+ * Dividing the reciprocal back by `per` cancels exactly that. For the common
+ * case — a pence instrument in a sterling account, where Trading 212 reports
+ * `fxRate: 100` — it gives 1, which is right: after the host's own conversion
+ * there is nothing left to convert.
+ *
+ * Note this differs from the `checkImport`/`import` path, which does *not*
+ * normalise minor units and therefore needs the plain reciprocal. The two are
+ * not interchangeable.
  */
-function hostFxRate(_currency: string | undefined, t212Rate: number | undefined): number | undefined {
+function hostFxRate(currency: string | undefined, t212Rate: number | undefined): number | undefined {
   if (!t212Rate) return undefined;
-  return 1 / t212Rate;
+  const { per } = toMajorUnits(1, currency ?? '');
+  return per / t212Rate;
 }
 
 /**
