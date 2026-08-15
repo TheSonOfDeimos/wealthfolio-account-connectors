@@ -67,7 +67,7 @@ const FEE_CHARGES: string[] = [
  */
 const CURRENCY_ALIASES: Record<string, string> = { GBX: 'GBp' };
 
-function hostCurrency(currency: string | undefined): string | undefined {
+export function hostCurrency(currency: string | undefined): string | undefined {
   if (!currency) return undefined;
   return CURRENCY_ALIASES[currency] ?? currency;
 }

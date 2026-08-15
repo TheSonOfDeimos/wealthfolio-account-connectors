@@ -1,5 +1,6 @@
 import type { ActivityCreate, AddonContext } from '@wealthfolio/addon-sdk';
 import { HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
+import { reconcileAssetCurrencies } from './asset-currency';
 import { createBrokeredFetch } from './brokered-fetch';
 import { buildAssetIndex, createRawGet, extractAll } from './extract';
 import type { T212Dataset, T212Source } from './extract';
@@ -255,6 +256,22 @@ export async function runSync(
     );
   } else {
     log('success', 'Already up to date — nothing new on Trading 212.');
+  }
+
+  // Wealthfolio takes an asset's currency from its exchange rather than from
+  // the one the import supplied, which puts every London line in pence whether
+  // or not it trades in them. Trading 212 states the currency per instrument,
+  // so the disagreement is checked here and settled in the broker's favour
+  // before anything is revalued — otherwise the wrong unit is baked into every
+  // snapshot the recalculation writes.
+  progress({ phase: 'Currencies', message: 'Checking what each asset is priced in…' });
+  const currencyFixes = await reconcileAssetCurrencies(ctx, accountId, log);
+  for (const fix of currencyFixes) {
+    if (fix.applied) {
+      log('success', `${fix.symbol}: currency corrected from ${fix.was} to ${fix.now}.`);
+    } else {
+      log('error', `${fix.symbol}: should be ${fix.now}, not ${fix.was} — ${fix.error}`);
+    }
   }
 
   // An import introduces instruments and currencies Wealthfolio has never seen,

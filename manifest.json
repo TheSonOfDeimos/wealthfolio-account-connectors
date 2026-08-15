@@ -95,6 +95,14 @@
         "syncHistory"
       ],
       "purpose": "Look up ticker symbols while you correct one, and ask Wealthfolio to fetch prices and exchange rates for the instruments and currencies an import introduces, so a fresh install is not left reporting missing rates."
+    },
+    {
+      "category": "assets",
+      "functions": [
+        "getProfile",
+        "updateProfile"
+      ],
+      "purpose": "Read the currency Wealthfolio assigned to each imported security and correct it when it disagrees with the one Trading 212 states, so a London line quoted in pounds is not read as pence."
     }
   ]
 }

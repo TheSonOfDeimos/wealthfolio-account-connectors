@@ -297,6 +297,37 @@ export function exchangeMicFor(ticker: string): string | undefined {
 }
 
 /**
+ * What Trading 212 prices each listing in, keyed by `"SYMBOL|MIC"`.
+ *
+ * Keyed by venue as well as symbol because one symbol is not one instrument:
+ * a London line and its American depositary receipt can share a ticker and be
+ * quoted in different currencies. Where two listings do collide on both symbol
+ * and venue and disagree, the entry is dropped — an ambiguous answer is worse
+ * than none, because it would be applied with full confidence.
+ *
+ * Built once, lazily: the table has 17,400 entries and most runs never ask.
+ */
+let quoteCurrencies: Map<string, string> | undefined;
+
+export function quoteCurrencyFor(symbol: string, mic: string | undefined): string | undefined {
+  if (!quoteCurrencies) {
+    const found = new Map<string, string>();
+    const conflicted = new Set<string>();
+    for (const entry of Object.values(SYMBOL_TABLE)) {
+      const [name, venue, currency] = entry.split('|');
+      if (!name || !currency) continue;
+      const key = `${name}|${venue ?? ''}`;
+      const seen = found.get(key);
+      if (seen && seen !== currency) conflicted.add(key);
+      else found.set(key, currency);
+    }
+    for (const key of conflicted) found.delete(key);
+    quoteCurrencies = found;
+  }
+  return quoteCurrencies.get(`${symbol}|${mic ?? ''}`);
+}
+
+/**
  * Resolve tickers the bundled table has never heard of.
  *
  * The table is captured at build time, so anything Trading 212 lists afterwards
