@@ -96,6 +96,12 @@ export const SELECTED_ACCOUNT_STORAGE_KEY = 'selected-account-id';
 export const LINKED_ACCOUNT_STORAGE_KEY = 'linked-account-id';
 
 /**
+ * The last symbol review, so the Symbols panel is populated on load instead of
+ * staying blank until the next sync.
+ */
+export const REVIEW_STORAGE_KEY = 'symbol-review';
+
+/**
  * Stamped on accounts this addon creates, alongside the Trading 212 account id.
  * Together they survive a rename and a cleared addon storage, which is what
  * makes re-finding the account reliable.

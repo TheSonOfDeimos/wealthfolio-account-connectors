@@ -145,8 +145,19 @@ export interface MappingIssue {
   message: string;
 }
 
+/**
+ * An import row plus the fields the backend accepts and the SDK omits.
+ *
+ * `isin` is recognised by Wealthfolio's own importer — it appears in the
+ * frontend's own list of import fields — but `ActivityImport` does not declare
+ * it. Rather than drop the one identifier that survives a rename, the type is
+ * widened here, alongside every other place these SDKs disagree with their
+ * backend.
+ */
+export type MappedActivity = ActivityImport & { isin?: string };
+
 export interface MapResult {
-  activities: ActivityImport[];
+  activities: MappedActivity[];
   issues: MappingIssue[];
 }
 
@@ -166,7 +177,7 @@ export function mapDataset(
   /** Symbols found by searching this run, for tickers the table lacks. */
   searched: Record<string, string> = {},
 ): MapResult {
-  const activities: ActivityImport[] = [];
+  const activities: MappedActivity[] = [];
   const issues: MappingIssue[] = [];
   const skip = (message: string) => issues.push({ kind: 'skipped', message });
   const warn = (message: string) => issues.push({ kind: 'warning', message });
@@ -288,7 +299,7 @@ function mapSplit(
   event: T212Event,
   context: Context,
   line: number,
-): ActivityImport[] {
+): MappedActivity[] {
   const removed = Math.abs(pair.removed.quantity);
   const added = Math.abs(pair.added.quantity);
   if (!(removed > 0) || !(added > 0)) {
@@ -341,7 +352,7 @@ function mapOrder(
   event: Extract<T212Event, { kind: 'order' }>,
   context: Context,
   line: number,
-): ActivityImport[] {
+): MappedActivity[] {
   const { order, fill } = event.record;
   if (!order || !fill) return [];
 
@@ -380,7 +391,7 @@ function mapOrder(
     return [];
   }
 
-  const trade: ActivityImport = {
+  const trade: MappedActivity = {
     ...base(context.accountId, event, line),
     activityType: order.side,
     symbol,
@@ -394,6 +405,11 @@ function mapOrder(
     // Without this the host guesses the venue from the bare symbol, and guesses
     // wrong — a London ETF was looked up on Deutsche Börse and not found.
     exchangeMic: micFor(ticker, asset),
+    // Trading 212 states an ISIN for every instrument, and it is the one
+    // identifier that survives a company renaming — the very thing that
+    // defeated symbol matching. Wealthfolio's own import recognises the field
+    // even though the SDK's types omit it.
+    isin: asset?.isin ?? order.instrument?.isin,
     fxRate: hostFxRate(currency, fill.walletImpact?.fxRate),
     comment: describeTrade(order, fill, ticker),
   };
@@ -412,9 +428,9 @@ function mapCharges(
   line: number,
   ticker: string,
   orderId: number,
-): ActivityImport[] {
+): MappedActivity[] {
   const charges = fill.walletImpact?.taxes ?? [];
-  const rows: ActivityImport[] = [];
+  const rows: MappedActivity[] = [];
 
   charges.forEach((charge: Tax, index) => {
     const amount = Math.abs(charge.quantity ?? 0);
@@ -451,7 +467,7 @@ function mapDividend(
   event: Extract<T212Event, { kind: 'dividend' }>,
   context: Context,
   line: number,
-): ActivityImport[] {
+): MappedActivity[] {
   const item: HistoryDividendItem = event.record;
   const ticker = item.instrument?.ticker ?? item.ticker;
   const asset = context.assets.get(ticker);
@@ -481,6 +497,7 @@ function mapDividend(
       quoteCcy: hostCurrency(quoteCcy),
       exchangeMic: micFor(ticker, asset),
       instrumentType: asset?.type,
+      isin: asset?.isin ?? item.instrument?.isin,
       comment:
         `${event.sourceId} ticker=${ticker} grossPerShare=${item.grossAmountPerShare} ` +
         `qty=${item.quantity} type=${item.type}`,
@@ -527,7 +544,7 @@ function mapTransaction(
   event: Extract<T212Event, { kind: 'transaction' }>,
   context: Context,
   line: number,
-): ActivityImport[] {
+): MappedActivity[] {
   const item: T212Transaction = event.record;
   const amount = Math.abs(item.amount);
 

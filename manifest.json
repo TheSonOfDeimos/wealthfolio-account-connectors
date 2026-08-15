@@ -91,9 +91,10 @@
     {
       "category": "market-data",
       "functions": [
-        "searchTicker"
+        "searchTicker",
+        "syncHistory"
       ],
-      "purpose": "Look up ticker symbols while you correct one, so the Symbols panel can suggest matches by name or code the same way Wealthfolio's own asset search does."
+      "purpose": "Look up ticker symbols while you correct one, and ask Wealthfolio to fetch prices and exchange rates for the instruments and currencies an import introduces, so a fresh install is not left reporting missing rates."
     }
   ]
 }

@@ -1,11 +1,22 @@
-import type { ActivityCreate, ActivityImport, AddonContext } from '@wealthfolio/addon-sdk';
+import type { ActivityCreate, AddonContext } from '@wealthfolio/addon-sdk';
 import { HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
 import { createBrokeredFetch } from './brokered-fetch';
 import { buildAssetIndex, createRawGet, extractAll } from './extract';
 import type { T212Dataset, T212Source } from './extract';
 import { activityKeyOf, mapDataset } from './mapper';
-import type { MappingIssue } from './mapper';
-import { loadOverrides, resolveSymbol, resolveUnknownSymbols, reviewSymbols } from './symbols';
+import type { MappedActivity, MappingIssue } from './mapper';
+import {
+  loadOverrides,
+  resolveSymbol,
+  resolveUnknownSymbols,
+  reviewSymbols,
+  saveOverrides,
+} from './symbols';
+import {
+  LINKED_ACCOUNT_STORAGE_KEY,
+  REVIEW_STORAGE_KEY,
+  SELECTED_ACCOUNT_STORAGE_KEY,
+} from '../config';
 import type { SymbolReview } from './symbols';
 import { T212 } from 't212-sdk';
 
@@ -130,8 +141,12 @@ export async function runSync(
     maxItemsPerStream: bounded ? MAX_HISTORY_ITEMS : Infinity,
     pageLimit: HISTORY_PAGE_LIMIT,
     knownSourceIds,
-    onProgress: (event) =>
-      progress({ phase: 'Trading 212', message: `${event.stream}: ${event.message}` }),
+    onProgress: (event) => {
+      progress({ phase: 'Trading 212', message: `${event.stream}: ${event.message}` });
+      // Also written to the log, so a run that pauses on Trading 212's rate
+      // limiter still shows visible progress rather than looking stuck.
+      log('info', `${event.stream}: ${event.message}`);
+    },
   });
 
   for (const stat of dataset.stats) {
@@ -242,6 +257,20 @@ export async function runSync(
     log('success', 'Already up to date — nothing new on Trading 212.');
   }
 
+  // An import introduces instruments and currencies Wealthfolio has never seen,
+  // and on a fresh install it has fetched neither their prices nor the exchange
+  // rates between their currencies and yours. Left alone it reports both as
+  // data-health problems — "exchange rate update needed", valuation rows with
+  // incomplete market value — so the sync is asked for here rather than left
+  // for the user to discover and trigger by hand.
+  progress({ phase: 'Market data', message: 'Fetching prices and exchange rates…' });
+  try {
+    await ctx.api.market.syncHistory();
+    log('success', 'Prices and exchange rates refreshed.');
+  } catch (error) {
+    log('warn', `Could not refresh market data: ${describeError(error)}`);
+  }
+
   progress({ phase: 'Recalculating', message: 'Asking Wealthfolio to revalue the portfolio…' });
   await ctx.api.portfolio.recalculate();
   await settle(ctx, accountId, progress);
@@ -253,6 +282,14 @@ export async function runSync(
   if (needsAttention.length > 0) {
     log('warn', `${needsAttention.length} holding(s) need a symbol check — see Symbols below.`);
   }
+  // Kept so the Symbols panel is populated the moment the page loads again,
+  // rather than staying blank until someone runs another sync.
+  try {
+    await ctx.api.storage.set(REVIEW_STORAGE_KEY, JSON.stringify(review));
+  } catch (error) {
+    log('warn', `Could not remember the symbol review: ${describeError(error)}`);
+  }
+
   log('success', 'Done.');
 
   return { mode, imported, duplicates, deleted, invalid, issues, dataset, review };
@@ -285,6 +322,54 @@ async function settle(
       message: `${count} holdings valued…`,
     });
   }
+}
+
+/**
+ * Undo everything the addon has done, short of the one thing it cannot.
+ *
+ * Removes every imported activity, the remembered account link, the saved
+ * symbol review and your ticker corrections, leaving the addon as it was on
+ * first install — ready to be set up again or removed.
+ *
+ * **The account itself survives, and has to.** Wealthfolio gives an addon
+ * `accounts.getAll` and `accounts.create` and nothing else; there is no delete.
+ * The account is left empty, and the caller is expected to say so plainly
+ * rather than imply a clean sweep. Assets the import created also remain —
+ * they belong to Wealthfolio, are shared with any other account holding the
+ * same security, and an addon cannot remove them either.
+ */
+export async function resetEverything(
+  ctx: AddonContext,
+  accountId: string | undefined,
+  reporter: Reporter,
+): Promise<{ deleted: number }> {
+  const { log, progress } = reporter;
+  let deleted = 0;
+
+  if (accountId) {
+    progress({ phase: 'Resetting', message: 'Removing imported activities…' });
+    deleted = await deleteImported(ctx, accountId, reporter);
+
+    progress({ phase: 'Resetting', message: 'Clearing ticker corrections…' });
+    try {
+      await saveOverrides(ctx, accountId, {});
+      log('info', 'Ticker corrections cleared.');
+    } catch (error) {
+      log('warn', `Could not clear ticker corrections: ${describeError(error)}`);
+    }
+  }
+
+  progress({ phase: 'Resetting', message: 'Forgetting the linked account…' });
+  for (const key of [LINKED_ACCOUNT_STORAGE_KEY, REVIEW_STORAGE_KEY, SELECTED_ACCOUNT_STORAGE_KEY]) {
+    try {
+      await ctx.api.storage.delete(key);
+    } catch {
+      // A key that was never written is not an error.
+    }
+  }
+  log('success', 'Addon reset. The account remains — delete it in Wealthfolio if you want it gone.');
+
+  return { deleted };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,7 +462,7 @@ const MIN_BATCH = 5;
  * of silently storing the activity with none. Everything else is a rename —
  * `date` becomes `activityDate`, and the resolution hints move inside `asset`.
  */
-function toCreate(row: ActivityImport): ActivityCreate {
+function toCreate(row: MappedActivity): ActivityCreate {
   return {
     accountId: row.accountId,
     activityType: row.activityType,
@@ -389,6 +474,7 @@ function toCreate(row: ActivityImport): ActivityCreate {
             quoteCcy: row.quoteCcy ?? row.currency,
             name: row.symbolName,
             ...(row.exchangeMic ? { exchangeMic: row.exchangeMic } : {}),
+            ...(row.isin ? { isin: row.isin } : {}),
           },
         }
       : {}),
@@ -401,4 +487,9 @@ function toCreate(row: ActivityImport): ActivityCreate {
     fxRate: row.fxRate ?? null,
     comment: row.comment ?? null,
   };
+}
+
+/** An error's message, whatever kind of thing was thrown. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -1,9 +1,10 @@
 import type { Account, AddonContext, SymbolSearchResult } from '@wealthfolio/addon-sdk';
 import type { AccountSummary } from 't212-sdk';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { REVIEW_STORAGE_KEY } from '../config';
 import { describeMismatch, findLinkedAccount, linkOrCreateAccount } from '../lib/account';
 import { clearCredentials, hasCredentials, saveCredentials } from '../lib/credentials';
-import { runSync, source } from '../lib/pipeline';
+import { resetEverything, runSync, source } from '../lib/pipeline';
 import { loadOverrides, saveOverrides } from '../lib/symbols';
 import type { SymbolReview } from '../lib/symbols';
 import type { LogEntry, LogLevel, Progress, SyncMode, SyncResult } from '../lib/pipeline';
@@ -33,9 +34,14 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [result, setResult] = useState<SyncResult | null>(null);
   const [confirmWipe, setConfirmWipe] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   const mismatch = account && summary ? describeMismatch(account, summary) : undefined;
 
+  // Restore everything the addon already knows, so a reload lands on the same
+  // screen you left rather than back at "Connect". The broker call is the only
+  // slow part and it is a single request.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -43,8 +49,36 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
         const present = await hasCredentials(ctx);
         if (cancelled) return;
         setConfigured(present);
+        if (!present) return;
+
+        setRestoring(true);
+        const live = await source(ctx).client.account.getSummary();
+        if (cancelled) return;
+        setSummary(live);
+
+        const linked = await findLinkedAccount(ctx, live);
+        if (cancelled) return;
+        if (!linked) {
+          setStep('name');
+          return;
+        }
+
+        setAccount(linked.account);
+        setStep('ready');
+
+        // The Symbols panel is worth showing immediately; re-deriving it would
+        // mean another trip to Trading 212, so the last one is remembered.
+        const stored = await ctx.api.storage.get(REVIEW_STORAGE_KEY);
+        if (cancelled || !stored) return;
+        try {
+          setResult({ review: JSON.parse(stored) } as SyncResult);
+        } catch {
+          // A malformed cache is not worth surfacing; the next sync rewrites it.
+        }
       } catch (err) {
         if (!cancelled) fail(err);
+      } finally {
+        if (!cancelled) setRestoring(false);
       }
     })();
     return () => {
@@ -145,6 +179,23 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
 
   // ── Steps 3 and 4 ─────────────────────────────────────────────────────────
 
+  const onReset = () =>
+    run(async () => {
+      setLog([]);
+      append('info', 'Resetting the addon…');
+      const outcome = await resetEverything(ctx, account?.id, {
+        log: append,
+        progress: setProgress,
+      });
+      setResult(null);
+      setAccount(null);
+      setStep(summary ? 'name' : 'connect');
+      ctx.api.query.invalidateQueries('activities');
+      ctx.api.toast.success(
+        `Reset done — ${outcome.deleted} activities removed. The account itself is left for you to delete.`,
+      );
+    });
+
   const start = (mode: SyncMode) =>
     run(async () => {
       if (!account) return;
@@ -180,6 +231,12 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
       </header>
 
       <Steps current={step} />
+
+      {restoring ? (
+        <div className="border rounded-lg p-3 text-sm text-muted-foreground">
+          Restoring where you left off…
+        </div>
+      ) : null}
 
       {busy ? (
         <div className="border border-amber-300 bg-amber-50 text-amber-900 rounded-lg p-4 text-sm">
@@ -371,18 +428,75 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
               danger
             />
           </div>
+
+          <div className="border-t pt-4">
+            <Action
+              title="Reset the addon"
+              description="Removes the imported activities, your ticker corrections and the link to this account, putting the addon back to how it was on install — ready to set up again or uninstall. The account itself stays; Wealthfolio does not let an addon delete one."
+              button="Reset everything"
+              onClick={() => setConfirmReset(true)}
+              disabled={busy}
+              danger
+            />
+          </div>
         </Panel>
       ) : null}
 
+      {confirmReset ? (
+        <Confirm
+          title="Reset the addon?"
+          confirmLabel="Reset everything"
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={() => {
+            setConfirmReset(false);
+            onReset();
+          }}
+        >
+          <p>This puts the addon back to how it was on install:</p>
+          <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+            <li>
+              <strong>Removed:</strong> every activity this addon imported, your saved ticker
+              corrections, and the link between the addon and this account.
+            </li>
+            <li>
+              <strong>Kept:</strong> your Trading 212 credentials — use <em>Forget</em> above to
+              clear those too.
+            </li>
+            <li>
+              <strong>The account stays.</strong> Wealthfolio does not let an addon delete an
+              account, so <strong>{account?.name}</strong> is left empty for you to remove under
+              Settings → Accounts if you want it gone. Assets the import created also stay: they
+              belong to Wealthfolio and may be shared with your other accounts.
+            </li>
+            <li>Afterwards you can uninstall the addon, or run through the setup again.</li>
+          </ul>
+        </Confirm>
+      ) : null}
+
       {confirmWipe ? (
-        <ConfirmWipe
-          accountName={account?.name ?? ''}
+        <Confirm
+          title={`Wipe and reload ${account?.name ?? ''}?`}
+          confirmLabel="Wipe and reload"
           onCancel={() => setConfirmWipe(false)}
           onConfirm={() => {
             setConfirmWipe(false);
             start('wipe');
           }}
-        />
+        >
+          <p>This removes and re-imports data. Specifically:</p>
+          <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+            <li>
+              <strong>Deleted:</strong> every activity this addon imported into this account —
+              trades, dividends, deposits, interest and charges.
+            </li>
+            <li>
+              <strong>Kept:</strong> the account itself, your ticker corrections, and any activity
+              you added by hand. Only rows this addon recognises as its own are touched.
+            </li>
+            <li>Any history Wealthfolio derived from the old activities is rebuilt.</li>
+            <li>The whole history is then fetched again, which takes a few minutes.</li>
+          </ul>
+        </Confirm>
       ) : null}
 
       {account && step === 'ready' ? (
@@ -391,7 +505,23 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
           accountId={account.id}
           review={result?.review ?? []}
           busy={busy}
-          onSaved={() => ctx.api.toast.success('Symbol overrides saved.')}
+          onSaved={(changes) => {
+            for (const change of changes) {
+              append(
+                'success',
+                change.to
+                  ? `Symbol correction saved: ${change.ticker} → ${change.to}${
+                      change.from ? ` (was ${change.from})` : ''
+                    }.`
+                  : `Symbol correction removed for ${change.ticker}.`,
+              );
+            }
+            ctx.api.toast.success(
+              changes.length === 1
+                ? `Saved ${changes[0]!.ticker} → ${changes[0]!.to}.`
+                : `Saved ${changes.length} symbol corrections.`,
+            );
+          }}
         />
       ) : null}
 
@@ -503,19 +633,26 @@ function Action({
 }
 
 /**
- * The wipe confirmation.
+ * A confirmation for something that removes data.
  *
- * Deliberately lists what is and is not destroyed, because "wipe" reads worse
- * than it is — the account, and anything entered by hand into it, both survive.
+ * Shared by both destructive actions so they read alike, and focused on Cancel
+ * so the dangerous button is never the one a stray keypress finds. Each caller
+ * supplies its own list of what is removed and what survives, because "wipe"
+ * and "reset" read worse than they are — neither touches the account or
+ * anything entered by hand.
  */
-function ConfirmWipe({
-  accountName,
+function Confirm({
+  title,
+  confirmLabel,
   onCancel,
   onConfirm,
+  children,
 }: {
-  accountName: string;
+  title: string;
+  confirmLabel: string;
   onCancel: () => void;
   onConfirm: () => void;
+  children: React.ReactNode;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   useEffect(() => cancelRef.current?.focus(), []);
@@ -525,37 +662,20 @@ function ConfirmWipe({
       className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="wipe-title"
+      aria-labelledby="confirm-title"
       onKeyDown={(event) => event.key === 'Escape' && onCancel()}
     >
       <div className="bg-background border rounded-lg shadow-lg max-w-lg w-full p-5 space-y-4">
-        <h2 id="wipe-title" className="text-lg font-semibold">
-          Wipe and reload {accountName}?
+        <h2 id="confirm-title" className="text-lg font-semibold">
+          {title}
         </h2>
-        <div className="text-sm space-y-3">
-          <p>This removes and re-imports data. Specifically:</p>
-          <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
-            <li>
-              <strong>Deleted:</strong> every activity this addon imported into this account —
-              trades, dividends, deposits, interest and charges.
-            </li>
-            <li>
-              <strong>Kept:</strong> the account itself, and any activity you added by hand. Only
-              rows this addon recognises as its own are touched.
-            </li>
-            <li>
-              Prices already written to assets are not rolled back, and any history Wealthfolio
-              derived from the old activities is discarded and rebuilt.
-            </li>
-            <li>The whole history is then fetched again, which takes a few minutes.</li>
-          </ul>
-        </div>
+        <div className="text-sm space-y-3">{children}</div>
         <div className="flex justify-end gap-2">
           <Button onClick={onCancel} ref={cancelRef}>
             Cancel
           </Button>
           <Button onClick={onConfirm} danger>
-            Wipe and reload
+            {confirmLabel}
           </Button>
         </div>
       </div>
@@ -583,12 +703,13 @@ function Symbols({
   accountId: string;
   review: SymbolReview[];
   busy: boolean;
-  onSaved: () => void;
+  onSaved: (changes: { ticker: string; from?: string; to?: string }[]) => void;
 }) {
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
@@ -618,11 +739,18 @@ function Symbols({
   const save = async () => {
     setSaving(true);
     try {
+      // What actually changed, so the confirmation can name it rather than
+      // saying something vague happened.
+      const changes = Object.keys({ ...drafts, ...overrides })
+        .filter((ticker) => (drafts[ticker] ?? '') !== (overrides[ticker] ?? ''))
+        .map((ticker) => ({ ticker, from: overrides[ticker], to: drafts[ticker] }));
+
       await saveOverrides(ctx, accountId, drafts);
       const stored = await loadOverrides(ctx, accountId);
       setOverrides(stored);
       setDrafts(stored);
-      onSaved();
+      setSavedAt(new Date());
+      onSaved(changes);
     } catch (error) {
       ctx.api.toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -735,6 +863,13 @@ function Symbols({
           </table>
         </div>
       )}
+
+      {savedAt && !dirty ? (
+        <p className="text-sm rounded p-3 border border-green-200 bg-green-50 text-green-900">
+          Corrections saved at {savedAt.toTimeString().slice(0, 8)}. Run{' '}
+          <strong>Wipe and reload</strong> to re-import under them.
+        </p>
+      ) : null}
 
       {dirty ? (
         <div className="flex items-center gap-3">
