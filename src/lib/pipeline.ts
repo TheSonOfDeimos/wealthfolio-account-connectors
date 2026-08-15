@@ -1,4 +1,4 @@
-import type { ActivityImport, AddonContext } from '@wealthfolio/addon-sdk';
+import type { ActivityCreate, ActivityImport, AddonContext } from '@wealthfolio/addon-sdk';
 import { HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
 import { createBrokeredFetch } from './brokered-fetch';
 import { buildAssetIndex, createRawGet, extractAll } from './extract';
@@ -181,6 +181,17 @@ export async function runSync(
   let imported = 0;
   let invalid = 0;
   if (fresh.length > 0) {
+    // Written through `saveMany`, not `import`.
+    //
+    // `activities.import` does not create assets — every one of its summaries
+    // reports `assetsCreated: 0`, and on a database with no matching asset the
+    // activity is stored with an empty `asset_id`. Wealthfolio's own importer
+    // resolves assets in a separate step the addon SDK does not expose, so the
+    // rows land unattached and the portfolio calculator then rejects every one
+    // of them: "Invalid asset_id for position". On a clean install that was all
+    // 973 activities and a portfolio of nothing.
+    //
+    // `saveMany` takes an asset descriptor per row and creates what it needs.
     // Sent in batches because the host rejects a large payload outright: a
     // single `checkImport` of ~1000 rows comes back 422 Unprocessable Entity,
     // with no indication which row was at fault, because none of them was.
@@ -196,37 +207,27 @@ export async function runSync(
         total: fresh.length,
       });
 
-      let checked;
+      let result;
       try {
-        checked = await ctx.api.activities.checkImport(batch);
+        result = await ctx.api.activities.saveMany({
+          creates: batch.map((row) => toCreate(row)),
+        });
       } catch (error) {
-        // Almost always the request timing out on symbol resolution. Halving
-        // and retrying costs one wasted call and gets the run moving again;
+        // Usually the request timing out while resolving unfamiliar symbols
+        // against market data. Halving and retrying costs one wasted call;
         // giving up would cost the whole import.
         if (size > MIN_BATCH) {
           size = Math.max(MIN_BATCH, Math.floor(size / 2));
-          log('warn', `Validation failed for ${batch.length} rows, retrying in batches of ${size}.`);
+          log('warn', `Writing ${batch.length} rows failed, retrying in batches of ${size}.`);
           continue;
         }
         throw error;
       }
 
-      const valid = checked.filter((row) => row.isValid);
-      invalid += checked.length - valid.length;
-
-      for (const row of checked.filter((candidate) => !candidate.isValid).slice(0, 3)) {
-        log('warn', `Rejected ${row.symbol ?? row.activityType}: ${describeErrors(row)}`);
-      }
-
-      if (valid.length > 0) {
-        progress({
-          phase: 'Importing',
-          message: `Writing ${valid.length} activities…`,
-          done: done + batch.length,
-          total: fresh.length,
-        });
-        const result = await ctx.api.activities.import(valid);
-        imported += result.summary.imported;
+      imported += result.created.length;
+      invalid += result.errors.length;
+      for (const failure of result.errors.slice(0, 3)) {
+        log('warn', `Rejected: ${JSON.stringify(failure).slice(0, 160)}`);
       }
 
       done += batch.length;
@@ -368,9 +369,36 @@ const IMPORT_BATCH = 50;
 const MIN_BATCH = 5;
 
 
-function describeErrors(row: ActivityImport): string {
-  if (!row.errors) return 'no reason given';
-  return Object.entries(row.errors)
-    .map(([field, messages]) => `${field}: ${messages.join(', ')}`)
-    .join('; ');
+/**
+ * An import row as `saveMany` wants it.
+ *
+ * The difference that matters is `asset`: a descriptor rather than a bare
+ * symbol, which is what lets the host resolve or create the instrument instead
+ * of silently storing the activity with none. Everything else is a rename —
+ * `date` becomes `activityDate`, and the resolution hints move inside `asset`.
+ */
+function toCreate(row: ActivityImport): ActivityCreate {
+  return {
+    accountId: row.accountId,
+    activityType: row.activityType,
+    activityDate: row.date ?? new Date().toISOString(),
+    ...(row.symbol
+      ? {
+          asset: {
+            symbol: row.symbol,
+            quoteCcy: row.quoteCcy ?? row.currency,
+            name: row.symbolName,
+            ...(row.exchangeMic ? { exchangeMic: row.exchangeMic } : {}),
+          },
+        }
+      : {}),
+    quantity: row.quantity ?? null,
+    unitPrice: row.unitPrice ?? null,
+    amount: row.amount ?? null,
+    currency: row.currency,
+    fee: row.fee ?? null,
+    tax: row.tax ?? null,
+    fxRate: row.fxRate ?? null,
+    comment: row.comment ?? null,
+  };
 }

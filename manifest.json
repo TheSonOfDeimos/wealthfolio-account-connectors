@@ -73,14 +73,12 @@
     {
       "category": "activities",
       "functions": [
-        "checkImport",
-        "import",
         "getAll",
         "saveMany",
         "getImportMapping",
         "saveImportMapping"
       ],
-      "purpose": "Validate the mapped records, write them once you confirm, recognise what was already imported so a repeat sync adds only what is new, and store your ticker corrections in Wealthfolio's own per-account symbol mappings. Removing is used only by Wipe and reload, and only for rows this addon imported."
+      "purpose": "Write the mapped records once you confirm, recognise what was already imported so a repeat sync adds only what is new, and store your ticker corrections in Wealthfolio's own per-account symbol mappings. Removing is used only by Wipe and reload, and only for rows this addon imported."
     },
     {
       "category": "portfolio",

@@ -463,6 +463,24 @@ const TRANSACTION_ACTIVITY: Record<string, ActivityType> = {
   INTEREST_ON_FREE_CASH: 'INTEREST',
 };
 
+/**
+ * A Trading 212 `TRANSFER` becomes a deposit or a withdrawal, not a transfer.
+ *
+ * Wealthfolio's `TRANSFER_IN` means a move *between two of your accounts* and
+ * expects a matching `TRANSFER_OUT` to pair with. Trading 212 reports no
+ * counterparty at all, so the pair never exists: the host logs "unresolved
+ * transfer activity … marking scoped flow as unknown" and the money simply
+ * never lands. On this account that lost £6,126 of cash — the entire remaining
+ * discrepancy after everything else reconciled.
+ *
+ * From the account's point of view the money came in from outside, which is
+ * what `DEPOSIT` means here. The original type is preserved in the comment, so
+ * a transfer is still distinguishable from a genuine deposit after the fact.
+ */
+function transferActivity(amount: number): ActivityType {
+  return amount < 0 ? 'WITHDRAWAL' : 'DEPOSIT';
+}
+
 function mapTransaction(
   event: Extract<T212Event, { kind: 'transaction' }>,
   context: Context,
@@ -474,11 +492,7 @@ function mapTransaction(
   // A transfer's direction lives in the sign of its amount; every other type
   // names its own direction.
   const activityType =
-    item.type === 'TRANSFER'
-      ? item.amount < 0
-        ? 'TRANSFER_OUT'
-        : 'TRANSFER_IN'
-      : TRANSACTION_ACTIVITY[item.type];
+    item.type === 'TRANSFER' ? transferActivity(item.amount) : TRANSACTION_ACTIVITY[item.type];
 
   if (!activityType) {
     context.warn(
