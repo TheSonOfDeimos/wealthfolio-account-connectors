@@ -38,10 +38,11 @@ Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  c
 | --- | --- |
 | [manifest.json](manifest.json) | Addon identity, sidebar entry, permissions, allowed hosts. |
 | [src/addon.tsx](src/addon.tsx) | Entry point: registers the route, captures the host context. |
-| [src/config.ts](src/config.ts) | Credentials, environment, page limit. |
-| [src/lib/](src/lib/) | `brokered-fetch` (sandbox egress), `credentials` (keyring), `mapper` (translation), `sync` (pipeline). |
+| [src/config.ts](src/config.ts) | Credentials, environment, history limits. |
+| [src/lib/](src/lib/) | `extract` (everything read from Trading 212), `mapper` (translation), `account` (create/re-find the Wealthfolio account), `brokered-fetch` (sandbox egress), `credentials` (keyring), `sync` (pipeline). |
 | [src/pages/](src/pages/) | The import page. |
-| [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only check against the real Trading 212 API. |
+| [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only extraction report against the real Trading 212 API. |
+| [scripts/reconcile-docker.ts](scripts/reconcile-docker.ts) | Replays a ledger into the Docker instance and checks the cash balance against Trading 212. |
 | [compose.yml](compose.yml) | A local Wealthfolio instance for testing the addon. |
 | [.vscode/](.vscode/) | Workspace with tasks and debug configs. |
 
@@ -79,12 +80,55 @@ API and a real Wealthfolio instance.
 ### Against the real Trading 212 API
 
 ```bash
-pnpm smoke:live
+pnpm smoke:live                     # 200 items per history stream
+pnpm smoke:live -- --full           # walk the whole history
+pnpm smoke:live -- --streams=summary,positions
+pnpm smoke:live -- --json=out.json  # dump the raw dataset
 ```
 
-Performs the same two reads the addon performs, maps them with the same mapper,
-and prints what would be imported. Nothing is written; Wealthfolio is not
-involved. It also prints a currency check — see the note below.
+Drives [src/lib/extract.ts](src/lib/extract.ts) — the same module, the same
+calls, the same order the addon uses inside Wealthfolio — and prints what came
+back: per-stream timings, the ledger with its Trading 212 source ids, a census
+of every event type seen, one dossier per instrument the account has touched,
+current prices, and the reconciliation checks. Nothing is written; Wealthfolio
+is not involved.
+
+It exits non-zero if a stream fails or if two events share a source id, so it
+doubles as a regression check on the extraction layer.
+
+Three things it settled on a real account:
+
+- **Interest is reachable over REST.** `/equity/history/transactions` returns
+  `INTEREST_ON_FREE_CASH` rows, despite `t212-sdk` typing `TransactionType`
+  without them. No CSV export is needed.
+- **`t212-sdk` cannot paginate `/history/transactions`.** That endpoint's
+  `nextPagePath` carries `cursor` *and* `time`; the SDK extracts only `cursor`
+  and the API replies "Both or none of cursorId and time must be provided".
+  Every history stream therefore paginates through our own transport, which
+  replays `nextPagePath` verbatim.
+- **London listings are quoted in pence.** `currencyCode` is `GBX` and
+  `currentPrice x quantity` is exactly 100x the value Trading 212 reports for
+  the position. `toMajorUnits` does the scaling; the price check proves it,
+  landing all twelve GBX positions on a ratio of 1.0000.
+
+### Does the ledger reproduce Trading 212's cash?
+
+```bash
+pnpm smoke:live -- --full --json=full.json
+pnpm reconcile -- --dataset=full.json
+```
+
+Maps the ledger with the same `mapDataset` the addon uses, replays it into the
+Docker instance, and compares the resulting cash balance with the one Trading
+212 reports. Cash is the sharp test: it depends on nothing but the ledger —
+every deposit, trade, charge, dividend and interest payment in its own currency
+— so a match means the mapping is arithmetically sound. Exits non-zero on a
+drift over 2p.
+
+It writes over the container's REST API rather than through the addon host, so
+it proves the numbers, not the addon's plumbing. It deletes its probe account
+afterwards unless you pass `--keep`. A truncated ledger can never reconcile;
+`--full` is not optional here.
 
 ## A Wealthfolio instance in Docker
 
@@ -182,19 +226,56 @@ no reinstall, no tab reload. `compose.yml` already allows CORS from `:1420`.
   Wealthfolio will reject visibly; fix those with `SYMBOL_OVERRIDES` in
   [src/config.ts](src/config.ts). The ISIN travels in each activity's comment
   so a wrong symbol stays traceable.
-- **Open question — trade currency.** The mapper labels each row with the
-  wallet currency while taking `unitPrice` from `fill.price`, which may be
-  quoted in the instrument's currency. If so, a US stock bought in a GBP
-  account would be priced in USD but labelled GBP. `pnpm smoke:live` prints the
-  arithmetic that settles it; fix [src/lib/mapper.ts](src/lib/mapper.ts) before
-  trusting an import of cross-currency trades.
+- **Settled — currencies and rates.** `fill.price` is quoted in the
+  *instrument's* currency, and `fill.walletImpact.fxRate` **divides**:
+  `|price x quantity| / fxRate` reproduces the wallet impact, the remainder
+  being the fill's own charges. Verified across every `TRADE` fill in a live
+  account — 76 exact, 119 explained by charges, 0 unexplained; `pnpm
+  smoke:live` prints the arithmetic under "Fill pricing".
+
+## The mapping contract
+
+One rule: **record what Trading 212 recorded, and convert nothing.** Prices keep
+the currency they were quoted in, charges keep the currency they were charged
+in, and no exchange rate is derived or applied to an amount. Where Trading 212
+does not report a figure, none is invented.
+
+Three host behaviours shape the output. All three were verified against a real
+Wealthfolio 3.6.3 instance, not assumed:
+
+| Verified | Consequence |
+| --- | --- |
+| `fxRate` **multiplies** (`base = local x fxRate`) | Trading 212's rate divides, so the mapper sends `1 / fxRate`. Sending 1.3469 unchanged produced £1346.90 where £742.45 was correct — wrong by its own square. |
+| `GBX` and `GBp` are **normalised natively** | 2922 GBX x 8 stored as £233.76, matching Trading 212's `netValue` exactly. The mapper sends the raw pence price and `fxRate: 1`; scaling here would divide twice. |
+| `fee` is read **in the row's currency** | A GBP charge on a USD row is silently counted as USD, so charges leave as their own `FEE`/`TAX` activities in the currency they were charged. |
+
+On a live account this maps 505 events to 613 activities with zero warnings —
+`BUY` rows in USD, GBX, CAD, EUR and GBP, each keeping its own currency.
 
 ## Not yet covered
 
-Dividends (`/equity/history/dividends`), cash transactions
-(`/equity/history/transactions`), current positions (`/equity/positions`),
-corporate actions as SPLIT/DIVIDEND activities, and incremental sync that
-remembers the last cursor instead of re-reading the same window.
+- **Corporate actions.** `STOCK_SPLIT` and friends are extracted and reported,
+  never guessed at. Splits need the running quantity from a chronological
+  replay, since Trading 212 reports a share delta where Wealthfolio wants a
+  ratio — and it models one split as a paired sell and buy.
+- **Dividend withholding tax.** Not recoverable: `amount` is net of both
+  withholding *and* a currency conversion, `tickerCurrency` is absent from the
+  response despite being typed as required, and no per-dividend rate is given.
+  The gross per share is preserved in the comment instead.
+- **Prices and incremental sync.** No `quotes.update`, so market values come
+  from Wealthfolio's own provider, and no persisted high-water mark — each run
+  re-reads the same window rather than resuming.
+
+The addon can now create its own account ([src/lib/account.ts](src/lib/account.ts)),
+named by you and denominated in Trading 212's currency so cash needs no
+conversion. It is stamped with `provider: TRADING212` and the Trading 212
+account id, and re-found on later runs by stored id, then provider, then name —
+so a second run adopts the account instead of duplicating it. This needs the
+`accounts.create` permission, which is a re-consent prompt on upgrade.
+
+Two things the API cannot give at all: price history (there is no candles
+endpoint, only a live `currentPrice` per poll) and pie attribution (order
+history carries no pie id).
 
 ## References
 

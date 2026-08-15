@@ -9,9 +9,17 @@
   "sdkVersion": "3.6.2",
   "minWealthfolioVersion": "3.6.2",
   "enabled": true,
-  "keywords": ["wealthfolio", "addon", "trading212", "import", "broker"],
+  "keywords": [
+    "wealthfolio",
+    "addon",
+    "trading212",
+    "import",
+    "broker"
+  ],
   "network": {
-    "allowedHosts": ["live.trading212.com"]
+    "allowedHosts": [
+      "live.trading212.com"
+    ]
   },
   "hostDependencies": {
     "react": "^19.2.0",
@@ -19,7 +27,11 @@
     "@wealthfolio/addon-sdk": "^3.6.2"
   },
   "contributes": {
-    "routes": [{ "id": "trading212-import" }],
+    "routes": [
+      {
+        "id": "trading212-import"
+      }
+    ],
     "links": {
       "sidebar": [
         {
@@ -35,23 +47,55 @@
   "permissions": [
     {
       "category": "network",
-      "functions": ["request"],
+      "functions": [
+        "request"
+      ],
       "purpose": "Read your order history from live.trading212.com. Only GET requests are made; the addon never places or cancels orders."
     },
     {
       "category": "secrets",
-      "functions": ["set", "get", "use", "delete"],
+      "functions": [
+        "set",
+        "get",
+        "use",
+        "delete"
+      ],
       "purpose": "Keep your Trading 212 API key and secret in the keyring, and let Wealthfolio attach them to Trading 212 requests without the addon reading them back. 'use' is what the network broker needs to resolve auth.secretKey."
     },
     {
       "category": "accounts",
-      "functions": ["getAll"],
-      "purpose": "Let you pick which Wealthfolio account the imported trades belong to."
+      "functions": [
+        "getAll",
+        "create"
+      ],
+      "purpose": "Let you pick which Wealthfolio account the imported trades belong to, or create a new one named by you that mirrors your Trading 212 account."
     },
     {
       "category": "activities",
-      "functions": ["checkImport", "import"],
-      "purpose": "Validate the mapped trades as a preview, then write them once you confirm."
+      "functions": [
+        "checkImport",
+        "import",
+        "getAll",
+        "saveMany",
+        "getImportMapping",
+        "saveImportMapping"
+      ],
+      "purpose": "Validate the mapped records, write them once you confirm, recognise what was already imported so a repeat sync adds only what is new, and store your ticker corrections in Wealthfolio's own per-account symbol mappings. Removing is used only by Wipe and reload, and only for rows this addon imported."
+    },
+    {
+      "category": "portfolio",
+      "functions": [
+        "recalculate",
+        "getHoldings"
+      ],
+      "purpose": "Ask Wealthfolio to revalue the portfolio after an import, and read back your holdings to check that each Trading 212 instrument resolved to the right symbol."
+    },
+    {
+      "category": "market-data",
+      "functions": [
+        "searchTicker"
+      ],
+      "purpose": "Look up ticker symbols while you correct one, so the Symbols panel can suggest matches by name or code the same way Wealthfolio's own asset search does."
     }
   ]
 }

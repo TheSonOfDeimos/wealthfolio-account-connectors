@@ -1,41 +1,48 @@
-import type { Account, AddonContext } from '@wealthfolio/addon-sdk';
+import type { Account, AddonContext, SymbolSearchResult } from '@wealthfolio/addon-sdk';
 import type { AccountSummary } from 't212-sdk';
-import { useCallback, useEffect, useState } from 'react';
-import { SELECTED_ACCOUNT_STORAGE_KEY } from '../config';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { describeMismatch, findLinkedAccount, linkOrCreateAccount } from '../lib/account';
 import { clearCredentials, hasCredentials, saveCredentials } from '../lib/credentials';
-import type { MappingIssue } from '../lib/mapper';
-import { commitImport, fetchAccountSummary, previewImport } from '../lib/sync';
-import type { PreviewResult } from '../lib/sync';
+import { runSync, source } from '../lib/pipeline';
+import { loadOverrides, saveOverrides } from '../lib/symbols';
+import type { SymbolReview } from '../lib/symbols';
+import type { LogEntry, LogLevel, Progress, SyncMode, SyncResult } from '../lib/pipeline';
 
-type Phase = 'idle' | 'working' | 'error';
+/**
+ * Onboarding once, then a control panel forever.
+ *
+ * The wizard exists because the first run has a strict order — credentials, an
+ * account to import into, then the import itself — and each step needs the one
+ * before it to have succeeded. Once an account is linked the wizard has nothing
+ * left to ask, so it collapses to the two buttons you will actually use again.
+ */
+
+type Step = 'connect' | 'name' | 'confirm' | 'ready';
 
 export function ImportPage({ ctx }: { ctx: AddonContext }) {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [accountId, setAccountId] = useState('');
   const [summary, setSummary] = useState<AccountSummary | null>(null);
-  const [preview, setPreview] = useState<PreviewResult | null>(null);
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [status, setStatus] = useState('');
+  const [account, setAccount] = useState<Account | null>(null);
+  const [accountName, setAccountName] = useState('Trading 212');
+  const [step, setStep] = useState<Step>('connect');
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [log, setLog] = useState<LogEntry[]>([]);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [result, setResult] = useState<SyncResult | null>(null);
+  const [confirmWipe, setConfirmWipe] = useState(false);
+
+  const mismatch = account && summary ? describeMismatch(account, summary) : undefined;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [credentialsPresent, allAccounts, storedAccountId] = await Promise.all([
-          hasCredentials(ctx),
-          ctx.api.accounts.getAll(),
-          ctx.api.storage.get(SELECTED_ACCOUNT_STORAGE_KEY),
-        ]);
+        const present = await hasCredentials(ctx);
         if (cancelled) return;
-        setConfigured(credentialsPresent);
-        setAccounts(allAccounts);
-        // Fall back to the first active account so there is always a target.
-        const usable = allAccounts.filter((account) => account.isActive && !account.isArchived);
-        setAccountId(storedAccountId ?? usable[0]?.id ?? '');
+        setConfigured(present);
       } catch (err) {
         if (!cancelled) fail(err);
       }
@@ -49,126 +56,157 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
   function fail(err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     setError(message);
-    setPhase('error');
-    setStatus('');
+    setBusy(false);
+    setProgress(null);
     ctx.api.logger.error(`[trading212] ${message}`);
   }
 
-  async function run(label: string, action: () => Promise<void>) {
-    setPhase('working');
+  // A reload or tab close is the one exit the addon can object to; an in-app
+  // route change unmounts this component with no chance to intervene, which is
+  // why the banner above exists as well.
+  useEffect(() => {
+    if (!busy) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [busy]);
+
+  const append = useCallback((level: LogLevel, message: string) => {
+    setLog((entries) => [...entries, { at: new Date().toISOString(), level, message }]);
+  }, []);
+
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
     setError('');
-    setStatus(label);
     try {
       await action();
-      setPhase('idle');
-      setStatus('');
     } catch (err) {
       fail(err);
+      return;
     }
+    setBusy(false);
+    setProgress(null);
   }
 
+  // ── Step 1 ────────────────────────────────────────────────────────────────
+
   const onSaveCredentials = () =>
-    run('Saving credentials…', async () => {
+    run(async () => {
       await saveCredentials(ctx, apiKey, apiSecret);
       setApiKey('');
       setApiSecret('');
       setConfigured(true);
-      ctx.api.toast.success('Trading 212 credentials saved to the keyring.');
+      ctx.api.toast.success('Credentials saved to the keyring.');
     });
 
-  const onForgetCredentials = () =>
-    run('Removing credentials…', async () => {
+  const onConnect = () =>
+    run(async () => {
+      setProgress({ phase: 'Trading 212', message: 'Contacting your broker…' });
+      const live = await source(ctx).client.account.getSummary();
+      setSummary(live);
+      append('success', `Connected to Trading 212 account ${live.id} (${live.currency}).`);
+
+      // A second run should not be asked to name an account it already has.
+      const linked = await findLinkedAccount(ctx, live);
+      if (linked) {
+        setAccount(linked.account);
+        setStep('ready');
+        append('info', `Already linked to "${linked.account.name}".`);
+      } else {
+        setStep('name');
+      }
+    });
+
+  const onForget = () =>
+    run(async () => {
       await clearCredentials(ctx);
       setConfigured(false);
       setSummary(null);
-      setPreview(null);
-      ctx.api.toast.info('Trading 212 credentials removed.');
+      setAccount(null);
+      setStep('connect');
     });
 
-  const onTestConnection = () =>
-    run('Contacting Trading 212…', async () => {
-      setSummary(await fetchAccountSummary(ctx));
-    });
+  // ── Step 2 ────────────────────────────────────────────────────────────────
 
-  const onPreview = useCallback(
-    () =>
-      run('Fetching order history…', async () => {
-        setPreview(null);
-        setPreview(await previewImport(ctx, accountId, setStatus));
-        await ctx.api.storage.set(SELECTED_ACCOUNT_STORAGE_KEY, accountId);
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ctx, accountId],
-  );
-
-  const onImport = () =>
-    run('Importing into Wealthfolio…', async () => {
-      if (!preview) return;
-      const result = await commitImport(ctx, preview.activities);
-      ctx.api.toast.success(
-        `Imported ${result.summary.imported} activities (${result.summary.duplicates} duplicates skipped).`,
+  const onCreateAccount = () =>
+    run(async () => {
+      if (!summary) return;
+      const linked = await linkOrCreateAccount(ctx, summary, accountName);
+      setAccount(linked.account);
+      append(
+        'success',
+        linked.created
+          ? `Created "${linked.account.name}" in ${linked.account.currency}.`
+          : `Using the existing account "${linked.account.name}".`,
       );
-      setPreview(null);
-      ctx.api.query.invalidateQueries('activities');
+      ctx.api.query.invalidateQueries('accounts');
+      setStep('confirm');
     });
 
-  const busy = phase === 'working';
+  // ── Steps 3 and 4 ─────────────────────────────────────────────────────────
+
+  const start = (mode: SyncMode) =>
+    run(async () => {
+      if (!account) return;
+      setResult(null);
+      setLog([]);
+      append('info', mode === 'wipe' ? 'Wiping and reloading…' : `Starting ${mode} sync…`);
+
+      const outcome = await runSync(
+        ctx,
+        account.id,
+        mode,
+        { log: append, progress: setProgress },
+      );
+
+      setResult(outcome);
+      setStep('ready');
+      ctx.api.query.invalidateQueries('activities');
+      ctx.api.toast.success(
+        outcome.imported > 0
+          ? `Imported ${outcome.imported} activities.`
+          : 'Already up to date.',
+      );
+    });
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
       <header>
-        <h1 className="text-3xl font-bold">Trading 212 Import</h1>
+        <h1 className="text-3xl font-bold">Trading 212</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Reads filled orders from your <strong>live</strong> Trading 212 account and imports
-          them as BUY/SELL activities. Nothing is written until you confirm the preview.
+          Imports your Trading 212 history — trades, dividends, deposits, interest and charges —
+          keeping every amount in the currency Trading 212 recorded it in.
         </p>
       </header>
 
+      <Steps current={step} />
+
+      {busy ? (
+        <div className="border border-amber-300 bg-amber-50 text-amber-900 rounded-lg p-4 text-sm">
+          <strong className="block mb-1">Keep this page open</strong>
+          A sync runs inside this page, so navigating to Dashboard, Holdings or anywhere else in
+          Wealthfolio stops it. Fetching your history takes a few minutes — leave the tab here
+          until it finishes. If it is interrupted, nothing is corrupted: rows already written are
+          kept, and running it again picks up the rest.
+        </div>
+      ) : null}
+
       {error ? (
-        <div className="border border-red-300 bg-red-50 text-red-800 rounded-lg p-4 text-sm">
+        <div className="border border-red-300 bg-red-50 text-red-900 rounded-lg p-4 text-sm">
           <strong className="block mb-1">Something went wrong</strong>
           {error}
         </div>
       ) : null}
 
-      {status ? (
-        <div className="border rounded-lg p-3 text-sm text-muted-foreground">{status}</div>
-      ) : null}
-
-      <section className="border rounded-lg p-5 space-y-3">
-        <h2 className="text-lg font-semibold">1. API credentials</h2>
+      {/* ── 1. Connect ─────────────────────────────────────────────────── */}
+      <Panel title="1. Connect your broker" done={summary !== null}>
         {configured === null ? (
           <p className="text-sm text-muted-foreground">Checking the keyring…</p>
-        ) : configured ? (
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-sm">
-              Credentials are stored in the OS keyring. Wealthfolio attaches them to each
-              request; the addon never reads them back.
-            </p>
-            <div className="flex gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={onTestConnection}
-                disabled={busy}
-                className="px-3 py-1.5 text-sm border rounded disabled:opacity-50"
-              >
-                Test connection
-              </button>
-              <button
-                type="button"
-                onClick={onForgetCredentials}
-                disabled={busy}
-                className="px-3 py-1.5 text-sm border rounded disabled:opacity-50"
-              >
-                Forget
-              </button>
-            </div>
-          </div>
-        ) : (
+        ) : !configured ? (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Generate a key pair in the Trading 212 mobile app (Settings → API). Read-only
-              access is enough for importing.
+              Generate a key pair in the Trading 212 app under Settings → API. Read access is
+              all this needs; it never places or cancels an order.
             </p>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-sm">
@@ -192,224 +230,801 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
                 />
               </label>
             </div>
-            <button
-              type="button"
-              onClick={onSaveCredentials}
-              disabled={busy || !apiKey || !apiSecret}
-              className="px-3 py-1.5 text-sm border rounded disabled:opacity-50"
-            >
+            <Button onClick={onSaveCredentials} disabled={busy || !apiKey || !apiSecret} primary>
               Save to keyring
-            </button>
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm text-muted-foreground">
+                Credentials are in the OS keyring. Wealthfolio attaches them to each request; the
+                addon never reads them back.
+              </p>
+              <div className="flex gap-2 shrink-0">
+                <Button onClick={onConnect} disabled={busy} primary>
+                  {summary ? 'Reconnect' : 'Connect Trading 212'}
+                </Button>
+                <Button onClick={onForget} disabled={busy}>
+                  Forget
+                </Button>
+              </div>
+            </div>
+
+            {summary ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
+                <Metric label="Broker account" value={String(summary.id)} />
+                <Metric label="Currency" value={summary.currency} />
+                <Metric
+                  label="Free cash"
+                  value={money(summary.cash.availableToTrade, summary.currency)}
+                />
+                <Metric label="Total value" value={money(summary.totalValue, summary.currency)} />
+                <Metric
+                  label="Invested"
+                  value={money(summary.investments.totalCost, summary.currency)}
+                />
+                <Metric
+                  label="Market value"
+                  value={money(summary.investments.currentValue, summary.currency)}
+                />
+                <Metric
+                  label="Unrealised"
+                  value={money(summary.investments.unrealizedProfitLoss, summary.currency)}
+                />
+                <Metric
+                  label="Realised"
+                  value={money(summary.investments.realizedProfitLoss, summary.currency)}
+                />
+              </div>
+            ) : null}
           </div>
         )}
+      </Panel>
 
-        {summary ? (
-          <dl className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-sm">
-            <Metric label="Account" value={String(summary.id)} />
-            <Metric
-              label="Free cash"
-              value={money(summary.cash.availableToTrade, summary.currency)}
+      {/* ── 2. Name ────────────────────────────────────────────────────── */}
+      {summary && step !== 'connect' ? (
+        <Panel title="2. Name the Wealthfolio account" done={account !== null}>
+          {account ? (
+            <p className="text-sm">
+              Importing into <strong>{account.name}</strong> ({account.currency}).{' '}
+              <span className="text-muted-foreground">
+                Renaming it in Wealthfolio is safe — this addon finds it by its broker id, not its
+                name.
+              </span>
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <label className="text-sm block">
+                <span className="block mb-1 font-medium">Account name</span>
+                <input
+                  value={accountName}
+                  onChange={(event) => setAccountName(event.target.value)}
+                  disabled={busy}
+                  className="w-full max-w-sm border rounded px-2 py-1.5 text-sm"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Created in <strong>{summary.currency}</strong>, matching Trading 212, so cash
+                movements need no conversion.
+              </p>
+              <Button onClick={onCreateAccount} disabled={busy || !accountName.trim()} primary>
+                Create account
+              </Button>
+            </div>
+          )}
+          {mismatch ? <Note tone="warn">{mismatch}</Note> : null}
+        </Panel>
+      ) : null}
+
+      {/* ── 3. Confirm ─────────────────────────────────────────────────── */}
+      {account && step === 'confirm' ? (
+        <Panel title="3. Import your history">
+          <div className="text-sm space-y-3">
+            <p>Here is what will happen when you confirm:</p>
+            <ul className="list-disc pl-5 space-y-1.5 text-muted-foreground">
+              <li>
+                Your whole Trading 212 history is read — filled orders, dividends, deposits and
+                withdrawals, interest on free cash, and every charge.
+              </li>
+              <li>
+                Each one is written as an activity <strong>in its own currency</strong>. A US
+                trade stays in dollars, a London one in pence, and the conversion rate Trading
+                212 recorded is attached so Wealthfolio can do the arithmetic itself.
+              </li>
+              <li>
+                Nothing is invented. Corporate actions such as share splits are reported for you
+                to enter by hand rather than guessed at, and withholding tax on foreign dividends
+                is left unset because Trading 212 does not report it separately.
+              </li>
+              <li>
+                This takes a few minutes. Trading 212 rate-limits its history endpoints and the
+                addon paces itself to stay within them.
+              </li>
+              <li>Nothing is written to Trading 212. Every call it makes is a read.</li>
+            </ul>
+            <Button onClick={() => start('full')} disabled={busy} primary>
+              Confirm and import
+            </Button>
+          </div>
+        </Panel>
+      ) : null}
+
+      {/* ── 4. Ready ───────────────────────────────────────────────────── */}
+      {account && step === 'ready' ? (
+        <Panel title="Keeping it up to date">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Action
+              title="Sync broker"
+              description="Fetches only what is new since the last run and adds it. Safe to run as often as you like — anything already imported is skipped, and nothing is removed. Prices come from Wealthfolio's own providers, not from Trading 212."
+              button="Sync broker"
+              onClick={() => start('incremental')}
+              disabled={busy}
+              primary
             />
-            <Metric
-              label="Investments"
-              value={money(summary.investments.currentValue, summary.currency)}
+            <Action
+              title="Wipe and reload"
+              description="Deletes every activity this addon imported into the account and fetches the whole history again. Use it after changing how data is mapped, or if an import went wrong."
+              button="Wipe and reload"
+              onClick={() => setConfirmWipe(true)}
+              disabled={busy}
+              danger
             />
-            <Metric label="Total value" value={money(summary.totalValue, summary.currency)} />
-          </dl>
-        ) : null}
-      </section>
+          </div>
+        </Panel>
+      ) : null}
 
-      <section className="border rounded-lg p-5 space-y-3">
-        <h2 className="text-lg font-semibold">2. Destination account</h2>
-        {accounts.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No Wealthfolio accounts yet — create one first, then reload this page.
-          </p>
-        ) : (
-          <select
-            value={accountId}
-            onChange={(event) => setAccountId(event.target.value)}
-            disabled={busy}
-            className="border rounded px-2 py-1.5 text-sm min-w-64"
-          >
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.name} ({account.currency})
-              </option>
-            ))}
-          </select>
-        )}
-      </section>
+      {confirmWipe ? (
+        <ConfirmWipe
+          accountName={account?.name ?? ''}
+          onCancel={() => setConfirmWipe(false)}
+          onConfirm={() => {
+            setConfirmWipe(false);
+            start('wipe');
+          }}
+        />
+      ) : null}
 
-      <section className="border rounded-lg p-5 space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold">3. Preview and import</h2>
-          <button
-            type="button"
-            onClick={onPreview}
-            disabled={busy || !configured || !accountId}
-            className="px-3 py-1.5 text-sm border rounded disabled:opacity-50"
-          >
-            {busy ? 'Working…' : 'Fetch and preview'}
-          </button>
-        </div>
+      {account && step === 'ready' ? (
+        <Symbols
+          ctx={ctx}
+          accountId={account.id}
+          review={result?.review ?? []}
+          busy={busy}
+          onSaved={() => ctx.api.toast.success('Symbol overrides saved.')}
+        />
+      ) : null}
 
-        {preview ? <PreviewPanel preview={preview} onImport={onImport} busy={busy} /> : null}
-      </section>
+      {progress || log.length > 0 ? (
+        <Activity progress={progress} log={log} result={result} busy={busy} />
+      ) : null}
     </div>
   );
 }
 
-function PreviewPanel({
-  preview,
-  onImport,
-  busy,
+// ─────────────────────────────────────────────────────────────────────────────
+//  Pieces
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STEP_LABELS: { key: Step; label: string }[] = [
+  { key: 'connect', label: 'Connect' },
+  { key: 'name', label: 'Name account' },
+  { key: 'confirm', label: 'Import' },
+  { key: 'ready', label: 'Keep in sync' },
+];
+
+function Steps({ current }: { current: Step }) {
+  const index = STEP_LABELS.findIndex((step) => step.key === current);
+  return (
+    <ol className="flex items-center gap-2 text-xs">
+      {STEP_LABELS.map((step, position) => {
+        const state = position < index ? 'done' : position === index ? 'current' : 'todo';
+        return (
+          <li key={step.key} className="flex items-center gap-2">
+            <span
+              className={
+                'flex items-center gap-1.5 px-2.5 py-1 rounded-full border ' +
+                (state === 'current'
+                  ? 'border-foreground font-medium'
+                  : state === 'done'
+                    ? 'border-transparent bg-muted text-muted-foreground'
+                    : 'border-transparent text-muted-foreground/60')
+              }
+            >
+              <span aria-hidden>{state === 'done' ? '✓' : position + 1}</span>
+              {step.label}
+            </span>
+            {position < STEP_LABELS.length - 1 ? (
+              <span className="text-muted-foreground/40" aria-hidden>
+                →
+              </span>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function Panel({
+  title,
+  done,
+  children,
 }: {
-  preview: PreviewResult;
-  onImport: () => void;
-  busy: boolean;
+  title: string;
+  done?: boolean;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-4">
-      <p className="text-sm">
-        <strong>{preview.validCount}</strong> ready to import,{' '}
-        <strong>{preview.activities.length - preview.validCount}</strong> with errors, from{' '}
-        {preview.pagesFetched} page{preview.pagesFetched === 1 ? '' : 's'} of history.
-        {preview.truncated ? ' More history is available beyond the page limit.' : ''}
+    <section className="border rounded-lg p-5 space-y-4">
+      <h2 className="text-lg font-semibold flex items-center gap-2">
+        {title}
+        {done ? (
+          <span className="text-xs font-normal text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+            done
+          </span>
+        ) : null}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function Action({
+  title,
+  description,
+  button,
+  onClick,
+  disabled,
+  primary,
+  danger,
+}: {
+  title: string;
+  description: string;
+  button: string;
+  onClick: () => void;
+  disabled: boolean;
+  primary?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <div className="border rounded-lg p-4 flex flex-col gap-3">
+      <div>
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{description}</p>
+      </div>
+      <div className="mt-auto">
+        <Button onClick={onClick} disabled={disabled} primary={primary} danger={danger}>
+          {button}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The wipe confirmation.
+ *
+ * Deliberately lists what is and is not destroyed, because "wipe" reads worse
+ * than it is — the account, and anything entered by hand into it, both survive.
+ */
+function ConfirmWipe({
+  accountName,
+  onCancel,
+  onConfirm,
+}: {
+  accountName: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => cancelRef.current?.focus(), []);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wipe-title"
+      onKeyDown={(event) => event.key === 'Escape' && onCancel()}
+    >
+      <div className="bg-background border rounded-lg shadow-lg max-w-lg w-full p-5 space-y-4">
+        <h2 id="wipe-title" className="text-lg font-semibold">
+          Wipe and reload {accountName}?
+        </h2>
+        <div className="text-sm space-y-3">
+          <p>This removes and re-imports data. Specifically:</p>
+          <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+            <li>
+              <strong>Deleted:</strong> every activity this addon imported into this account —
+              trades, dividends, deposits, interest and charges.
+            </li>
+            <li>
+              <strong>Kept:</strong> the account itself, and any activity you added by hand. Only
+              rows this addon recognises as its own are touched.
+            </li>
+            <li>
+              Prices already written to assets are not rolled back, and any history Wealthfolio
+              derived from the old activities is discarded and rebuilt.
+            </li>
+            <li>The whole history is then fetched again, which takes a few minutes.</li>
+          </ul>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onCancel} ref={cancelRef}>
+            Cancel
+          </Button>
+          <Button onClick={onConfirm} danger>
+            Wipe and reload
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Ticker corrections, and the holdings that look like they need one.
+ *
+ * Two things live here because they are two views of the same table: what the
+ * addon decided each Trading 212 ticker means, and the corrections you have
+ * made. Corrections are stored in Wealthfolio's own per-account symbol
+ * mappings, so they survive reinstalling the addon and belong to the account
+ * rather than to us.
+ */
+function Symbols({
+  ctx,
+  accountId,
+  review,
+  busy,
+  onSaved,
+}: {
+  ctx: AddonContext;
+  accountId: string;
+  review: SymbolReview[];
+  busy: boolean;
+  onSaved: () => void;
+}) {
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadOverrides(ctx, accountId).then((stored) => {
+      if (cancelled) return;
+      setOverrides(stored);
+      setDrafts(stored);
+      setLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx, accountId]);
+
+  const attention = review.filter((row) => row.status !== 'ok');
+  // Rows worth showing: anything unresolved, plus anything already overridden,
+  // even when it now looks healthy — otherwise a correction becomes invisible
+  // and impossible to undo.
+  const overridden = review.filter((row) => row.status === 'ok' && overrides[row.ticker]);
+  const shown = showAll ? review : [...attention, ...overridden];
+
+  const dirty = Object.keys({ ...drafts, ...overrides }).some(
+    (ticker) => (drafts[ticker] ?? '') !== (overrides[ticker] ?? ''),
+  );
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await saveOverrides(ctx, accountId, drafts);
+      const stored = await loadOverrides(ctx, accountId);
+      setOverrides(stored);
+      setDrafts(stored);
+      onSaved();
+    } catch (error) {
+      ctx.api.toast.error(error instanceof Error ? error.message : String(error));
+    }
+    setSaving(false);
+  };
+
+  return (
+    <section className="border rounded-lg p-5 space-y-4">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-lg font-semibold">Symbols</h2>
+        {review.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowAll((value) => !value)}
+            className="text-xs text-muted-foreground hover:underline"
+          >
+            {showAll ? 'Show only those needing attention' : `Show all ${review.length}`}
+          </button>
+        ) : null}
+      </div>
+
+      <p className="text-sm text-muted-foreground">
+        Trading 212 identifies instruments by a private code, so the market symbol is worked out
+        from it. That is right almost always, but a company that renamed keeps its old code —
+        Trading 212 reports no event for a rename — so the guess can be stale, and a stale symbol
+        can belong to someone else entirely. Anything marked <strong>wrong security</strong> is
+        priced far from what Trading 212 quotes, which means Wealthfolio matched a different
+        instrument. Correct it below; corrections are saved into Wealthfolio and applied on the
+        next sync.
       </p>
 
-      <IssueList kind="skipped" label="entry" issues={preview.issues} />
-      <IssueList kind="warning" label="mapping warning" issues={preview.issues} />
-
-      {preview.activities.length > 0 ? (
-        <div className="overflow-x-auto border rounded">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left">
-              <tr>
-                <Th>Date</Th>
-                <Th>Type</Th>
-                <Th>Symbol</Th>
-                <Th className="text-right">Qty</Th>
-                <Th className="text-right">Price</Th>
-                <Th className="text-right">Fee</Th>
-                <Th className="text-right">Tax</Th>
-                <Th>Status</Th>
+      {!loaded ? (
+        <p className="text-sm text-muted-foreground">Loading saved corrections…</p>
+      ) : review.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Run a sync and the holdings will be listed here with the symbol chosen for each.
+        </p>
+      ) : shown.length === 0 ? (
+        <p className="text-sm text-green-700">
+          All {review.length} holdings resolved and priced. Nothing needs a correction.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground border-b">
+                <th className="py-2 pr-3 font-medium">Trading 212</th>
+                <th className="py-2 pr-3 font-medium">Instrument</th>
+                <th className="py-2 pr-3 font-medium">Symbol used</th>
+                <th className="py-2 pr-3 font-medium">Status</th>
+                <th className="py-2 font-medium">Correct it</th>
               </tr>
             </thead>
             <tbody>
-              {preview.activities.map((row, index) => (
-                <tr key={row.comment ?? index} className="border-t">
-                  <Td>{formatDate(row.date)}</Td>
-                  <Td>{row.activityType}</Td>
-                  <Td>
-                    <span className="font-medium">{row.symbol}</span>
-                    {row.symbolName ? (
-                      <span className="block text-xs text-muted-foreground">
-                        {row.symbolName}
+              {shown.map((row) => (
+                <tr key={row.ticker} className="border-b border-border/40 last:border-b-0">
+                  <td className="py-2 pr-3 font-mono text-xs">{row.ticker}</td>
+                  <td className="py-2 pr-3">
+                    {row.name ?? '—'}
+                    {row.status === 'mismatch' && row.resolvedName ? (
+                      <span className="block text-xs text-red-700">
+                        Wealthfolio has: {row.resolvedName}
                       </span>
                     ) : null}
-                  </Td>
-                  <Td className="text-right tabular-nums">{row.quantity}</Td>
-                  <Td className="text-right tabular-nums">
-                    {row.unitPrice} {row.currency}
-                  </Td>
-                  <Td className="text-right tabular-nums">{row.fee}</Td>
-                  <Td className="text-right tabular-nums">{row.tax}</Td>
-                  <Td>
-                    {row.isValid ? (
-                      row.duplicateOfId ? (
-                        <span className="text-amber-700">duplicate</span>
-                      ) : (
-                        <span className="text-green-700">ok</span>
-                      )
-                    ) : (
-                      <span className="text-red-700">
-                        {Object.values(row.errors ?? {})
-                          .flat()
-                          .join('; ') || 'invalid'}
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-xs">
+                    {row.symbol}
+                    <span className="ml-1.5 text-muted-foreground">({row.source})</span>
+                  </td>
+                  <td className="py-2 pr-3">
+                    <StatusChip status={row.status} />
+                    {row.status === 'mismatch' ? (
+                      <span className="block text-xs text-muted-foreground mt-0.5 tabular-nums">
+                        {row.brokerPrice?.toFixed(2)} vs {row.wealthfolioPrice?.toFixed(2)}{' '}
+                        {row.currency}
                       </span>
-                    )}
-                  </Td>
+                    ) : null}
+                  </td>
+                  <td className="py-2">
+                    <SymbolInput
+                      ctx={ctx}
+                      value={drafts[row.ticker] ?? ''}
+                      placeholder={row.symbol}
+                      // Searching the instrument's name finds a renamed company
+                      // that its dead ticker never would.
+                      hint={row.name}
+                      disabled={busy || saving}
+                      onChange={(value) =>
+                        setDrafts((current) => ({ ...current, [row.ticker]: value }))
+                      }
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          No trades to import from this slice of history.
-        </p>
       )}
 
-      <button
-        type="button"
-        onClick={onImport}
-        disabled={busy || preview.validCount === 0}
-        className="px-4 py-2 text-sm font-medium border rounded bg-primary text-primary-foreground disabled:opacity-50"
-      >
-        Import {preview.validCount} activit{preview.validCount === 1 ? 'y' : 'ies'} into
-        Wealthfolio
-      </button>
+      {dirty ? (
+        <div className="flex items-center gap-3">
+          <Button onClick={save} disabled={busy || saving} primary>
+            {saving ? 'Saving…' : 'Save corrections'}
+          </Button>
+          <Button onClick={() => setDrafts(overrides)} disabled={busy || saving}>
+            Discard
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Then run <strong>Wipe and reload</strong> to re-import under the corrected symbols.
+          </span>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * A symbol field that searches as you type.
+ *
+ * Correcting a symbol means knowing what the company trades as now, which is
+ * exactly what the ticker cannot tell us — so this asks the same market-data
+ * search Wealthfolio uses for its own asset picker. Searching the instrument's
+ * *name* is usually the shortest path: "Tsakos Energy" finds TEN, where the
+ * dead ticker TNP finds nothing.
+ */
+function SymbolInput({
+  ctx,
+  value,
+  placeholder,
+  hint,
+  disabled,
+  onChange,
+}: {
+  ctx: AddonContext;
+  value: string;
+  placeholder: string;
+  hint?: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SymbolSearchResult[]>([]);
+  const [open, setOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+
+  // Debounced so a five-letter ticker is one search, not five.
+  useEffect(() => {
+    const term = query.trim();
+    if (term.length < 2) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const found = await ctx.api.market.searchTicker(term);
+        if (!cancelled) setResults(found.slice(0, 8));
+      } catch {
+        if (!cancelled) setResults([]);
+      }
+      if (!cancelled) setSearching(false);
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [ctx, query]);
+
+  const choose = (result: SymbolSearchResult) => {
+    onChange(result.canonicalSymbol ?? result.symbol);
+    setOpen(false);
+    setQuery('');
+  };
+
+  return (
+    <div className="relative">
+      <input
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => {
+          // Opening with the instrument's name already typed saves the step
+          // people would otherwise have to guess at.
+          if (!value && hint) setQuery(hint);
+          setOpen(true);
+        }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+        disabled={disabled}
+        spellCheck={false}
+        className="w-32 border rounded px-2 py-1 font-mono text-xs"
+      />
+
+      {open && (results.length > 0 || searching) ? (
+        <div className="absolute right-0 z-20 mt-1 w-80 max-h-64 overflow-y-auto border rounded bg-background shadow-lg">
+          {searching && results.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-muted-foreground">Searching…</div>
+          ) : (
+            results.map((result) => (
+              <button
+                key={`${result.symbol}-${result.exchange}`}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => choose(result)}
+                className="w-full text-left px-3 py-1.5 hover:bg-muted border-b last:border-b-0 border-border/40"
+              >
+                <div className="flex justify-between gap-2 text-xs">
+                  <span className="font-mono font-medium">
+                    {result.canonicalSymbol ?? result.symbol}
+                  </span>
+                  <span className="text-muted-foreground shrink-0">
+                    {result.exchangeName ?? result.exchange} {result.currency ?? ''}
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground truncate">
+                  {result.longName || result.shortName}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-/** Skipped entries and mapping warnings render identically; only the wording differs. */
-function IssueList({
-  kind,
-  label,
-  issues,
+function StatusChip({ status }: { status: SymbolReview['status'] }) {
+  const style =
+    status === 'ok'
+      ? 'text-green-700 border-green-200 bg-green-50'
+      : status === 'unpriced'
+        ? 'text-amber-800 border-amber-200 bg-amber-50'
+        : 'text-red-700 border-red-200 bg-red-50';
+  const label =
+    status === 'ok'
+      ? 'priced'
+      : status === 'unpriced'
+        ? 'no price found'
+        : status === 'mismatch'
+          ? 'wrong security'
+          : 'not imported';
+  return <span className={`text-xs border rounded-full px-2 py-0.5 ${style}`}>{label}</span>;
+}
+
+/** Progress bar, running log, and the summary a finished run leaves behind. */
+function Activity({
+  progress,
+  log,
+  result,
+  busy,
 }: {
-  kind: MappingIssue['kind'];
-  label: string;
-  issues: MappingIssue[];
+  progress: Progress | null;
+  log: LogEntry[];
+  result: SyncResult | null;
+  busy: boolean;
 }) {
-  const matching = issues.filter((issue) => issue.kind === kind);
-  if (matching.length === 0) return null;
+  const [expanded, setExpanded] = useState(true);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  // Follow the tail while it runs, so the newest line is always the visible one.
+  useEffect(() => {
+    if (busy) endRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [log.length, busy]);
 
   return (
-    <details className="text-sm border rounded p-3">
-      <summary className="cursor-pointer font-medium">
-        {matching.length} {label}
-        {matching.length === 1 ? '' : 's'}
-        {kind === 'skipped' ? ' not imported' : ''}
-      </summary>
-      <ul className="list-disc pl-5 mt-2 space-y-1 text-muted-foreground">
-        {matching.map((issue) => (
-          <li key={issue.message}>{issue.message}</li>
-        ))}
-      </ul>
-    </details>
+    <section className="border rounded-lg p-5 space-y-3">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-lg font-semibold">Activity</h2>
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="text-xs text-muted-foreground hover:underline"
+        >
+          {expanded ? 'Hide log' : `Show log (${log.length})`}
+        </button>
+      </div>
+
+      {progress ? (
+        <div className="space-y-1.5">
+          <div className="flex justify-between text-xs">
+            <span className="font-medium">{progress.phase}</span>
+            <span className="text-muted-foreground">
+              {progress.total ? `${progress.done ?? 0} / ${progress.total}` : ''}
+            </span>
+          </div>
+          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className={
+                'h-full bg-foreground/70 transition-all ' +
+                // Countable work gets a real bar; the rest gets a moving stripe,
+                // because a fake percentage is worse than none.
+                (progress.total ? '' : 'animate-pulse w-1/3')
+              }
+              style={
+                progress.total
+                  ? { width: `${Math.round(((progress.done ?? 0) / progress.total) * 100)}%` }
+                  : undefined
+              }
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">{progress.message}</p>
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Metric label="Imported" value={String(result.imported)} />
+          <Metric label="Skipped" value={String(result.duplicates)} />
+          <Metric label="Removed" value={String(result.deleted)} />
+          <Metric label="Rejected" value={String(result.invalid)} />
+        </div>
+      ) : null}
+
+      {expanded && log.length > 0 ? (
+        <div className="max-h-72 overflow-y-auto border rounded bg-muted/30 font-mono text-xs">
+          {log.map((entry, index) => (
+            <div
+              key={`${entry.at}-${index}`}
+              className="flex gap-2 px-3 py-1 border-b last:border-b-0 border-border/40"
+            >
+              <span className="text-muted-foreground shrink-0">{entry.at.slice(11, 19)}</span>
+              <span className={`shrink-0 w-14 ${LEVEL_STYLE[entry.level]}`}>{entry.level}</span>
+              <span className="whitespace-pre-wrap break-words">{entry.message}</span>
+            </div>
+          ))}
+          <div ref={endRef} />
+        </div>
+      ) : null}
+    </section>
   );
 }
+
+const LEVEL_STYLE: Record<LogLevel, string> = {
+  info: 'text-muted-foreground',
+  success: 'text-green-700',
+  warn: 'text-amber-700',
+  error: 'text-red-700',
+};
+
+
+function Note({ tone, children }: { tone: 'warn'; children: React.ReactNode }) {
+  return (
+    <p
+      className={
+        'text-sm rounded p-3 border ' +
+        (tone === 'warn' ? 'border-amber-300 bg-amber-50 text-amber-900' : '')
+      }
+    >
+      {children}
+    </p>
+  );
+}
+
+const Button = ({
+  ref,
+  onClick,
+  disabled,
+  primary,
+  danger,
+  children,
+}: {
+  ref?: React.Ref<HTMLButtonElement>;
+  onClick: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+  danger?: boolean;
+  children: React.ReactNode;
+}) => (
+  <button
+    ref={ref}
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    className={
+      'px-3 py-1.5 text-sm border rounded disabled:opacity-50 transition-colors ' +
+      (danger
+        ? 'border-red-300 text-red-700 hover:bg-red-50'
+        : primary
+          ? 'bg-foreground text-background border-foreground hover:opacity-90'
+          : 'hover:bg-muted')
+    }
+  >
+    {children}
+  </button>
+);
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div>
+    <div className="border rounded p-2.5">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="font-semibold tabular-nums">{value}</dd>
+      <dd className="font-medium tabular-nums text-sm mt-0.5">{value}</dd>
     </div>
   );
 }
 
-function Th({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <th className={`px-3 py-2 font-medium ${className}`}>{children}</th>;
-}
-
-function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <td className={`px-3 py-2 ${className}`}>{children}</td>;
-}
-
 function money(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
-  } catch {
-    return `${amount} ${currency}`;
-  }
-}
-
-function formatDate(value: Date | string | undefined): string {
-  if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString().slice(0, 10);
+  return `${amount.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} ${currency}`;
 }

@@ -52,6 +52,37 @@ export const SYMBOL_OVERRIDES: Record<string, string> = {
   // 'AIRp_EQ': 'AIR.PA',
 };
 
+/**
+ * Trading 212 exchange names to ISO 10383 market identifier codes.
+ *
+ * Without a MIC, Wealthfolio guesses the venue from the bare symbol and guesses
+ * badly: a live import resolved the London ETF `IBZL` as `IBZL@XETR` on
+ * Deutsche Börse and found nothing. The names on the left are Trading 212's
+ * own, taken from `/equity/metadata/exchanges`; add to this table when the
+ * smoke test reports an exchange that is not here.
+ */
+export const EXCHANGE_MIC: Record<string, string> = {
+  NYSE: 'XNYS',
+  NASDAQ: 'XNAS',
+  'London Stock Exchange': 'XLON',
+  'London Stock Exchange AIM': 'XLON',
+  'London Stock Exchange NON-ISA': 'XLON',
+  'Toronto Stock Exchange': 'XTSE',
+  'Deutsche Börse Xetra': 'XETR',
+  'SIX Swiss Exchange': 'XSWX',
+  'Wiener Börse': 'XWBO',
+  'Bolsa de Madrid': 'XMAD',
+  'Borsa Italiana': 'XMIL',
+  'Euronext Amsterdam': 'XAMS',
+  'Euronext Brussels': 'XBRU',
+  'Euronext Lisbon': 'XLIS',
+  'Euronext Paris': 'XPAR',
+  // Over-the-counter, not an exchange. Left unmapped on purpose: forcing a MIC
+  // here would send the lookup somewhere it certainly is not.
+  'OTC Markets': '',
+  Gettex: 'MUNC',
+};
+
 /** Keyring entry holding base64("API_KEY:API_SECRET"). */
 export const CREDENTIALS_SECRET_KEY = 'trading212-basic-auth';
 
@@ -59,8 +90,31 @@ export const CREDENTIALS_SECRET_KEY = 'trading212-basic-auth';
 export const SELECTED_ACCOUNT_STORAGE_KEY = 'selected-account-id';
 
 /**
- * How far back one sync walks. t212-sdk pages at the API's default size (20
- * entries) and paces itself against `/history/orders`' 6-requests-per-minute
- * budget, so 5 pages is one minute of budget and roughly 100 entries.
+ * The account this addon created and syncs into. Remembered so a second run
+ * adopts it instead of creating a duplicate.
  */
-export const MAX_HISTORY_PAGES = 5;
+export const LINKED_ACCOUNT_STORAGE_KEY = 'linked-account-id';
+
+/**
+ * Stamped on accounts this addon creates, alongside the Trading 212 account id.
+ * Together they survive a rename and a cleared addon storage, which is what
+ * makes re-finding the account reliable.
+ */
+export const T212_PROVIDER = 'TRADING212';
+
+/**
+ * How far back one extraction walks, per history stream.
+ *
+ * t212-sdk paces itself against each endpoint's rate-limit headers, so the
+ * only cost of a bigger number is wall-clock time. Raise it — or pass
+ * `Infinity` — for a full backfill; keep it small while iterating on mapping,
+ * where the shape of the data matters more than its volume.
+ */
+export const MAX_HISTORY_ITEMS = 200;
+
+/**
+ * Items per page for the history endpoints that accept a page size. Trading
+ * 212 caps this per endpoint and does not document the ceiling; a rejected
+ * value is retried once on the endpoint's own default.
+ */
+export const HISTORY_PAGE_LIMIT = 50;

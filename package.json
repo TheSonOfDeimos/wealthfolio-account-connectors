@@ -12,6 +12,7 @@
     "bundle": "pnpm clean && pnpm type-check && pnpm build && pnpm package",
     "type-check": "tsc --noEmit",
     "smoke:live": "tsx scripts/smoke-live.ts",
+    "reconcile": "tsx scripts/reconcile-docker.ts",
     "verify": "pnpm type-check && pnpm build",
     "dev:deploy": "tsx scripts/dev-deploy.ts"
   },
