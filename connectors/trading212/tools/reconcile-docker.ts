@@ -15,6 +15,13 @@
  * This talks to the container's REST API, not to the addon host, so it proves
  * the *numbers* rather than the addon's plumbing. The activities it writes come
  * from the same `mapDataset` the addon uses; only the transport differs.
+ *
+ * One caveat, discovered after this was written: it posts to `activities/import`,
+ * which does **not** create assets — rows land with an empty `asset_id`. Cash is
+ * unaffected, since it depends only on the ledger, so the verdict this script
+ * exists to give still holds. Market value, which it already declines to treat
+ * as a verdict, is meaningless here for that reason. Use `activities/saveMany`
+ * with an asset descriptor per row, as the addon does, if that ever matters.
  */
 
 import { readFileSync } from 'node:fs';
