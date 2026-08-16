@@ -39,7 +39,7 @@
           "id": "trading212-import",
           "route": "trading212-import",
           "label": "Trading 212",
-          "icon": "trend-up",
+          "icon": "bank",
           "order": 100
         }
       ]
