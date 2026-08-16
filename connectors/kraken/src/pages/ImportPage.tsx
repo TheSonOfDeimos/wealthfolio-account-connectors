@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Children, cloneElement, isValidElement, useCallback, useEffect, useRef, useState } from 'react';
 import type { Account, AddonContext } from '@wealthfolio/addon-sdk';
 import {
   clearKeyPair,
@@ -576,7 +576,7 @@ function ProviderGuide() {
       </Step2>
 
       <Step2 n={4} title="Provider identity">
-        <dl className="space-y-2 mt-2">
+        <dl className="space-y-1.5 pt-1">
           <CopyField label="Name" value={QUOTE_PROVIDER.name} />
           <CopyField label="Code" value={QUOTE_PROVIDER.id} />
         </dl>
@@ -589,7 +589,7 @@ function ProviderGuide() {
       <Step2 n={5} title="Configure Latest endpoint">
         Paste the <strong>URL template</strong>, then under{' '}
         <strong>Field mapping (latest)</strong> set <strong>Price</strong>.
-        <dl className="space-y-2 mt-2">
+        <dl className="space-y-1.5 pt-1">
           <CopyField label="URL" value={latest?.url ?? ''} />
           <CopyField label="Price" value={latest?.pricePath ?? ''} />
         </dl>
@@ -598,7 +598,7 @@ function ProviderGuide() {
       <Step2 n={6} title="Configure Historical endpoint">
         Same again for the historical URL, then map six fields under{' '}
         <strong>Field mapping (historical)</strong>.
-        <dl className="space-y-2 mt-2">
+        <dl className="space-y-1.5 pt-1">
           <CopyField label="URL" value={historical?.url ?? ''} />
           <CopyField label="Price" value={historical?.pricePath ?? ''} />
           {historical?.datePath ? <CopyField label="Date" value={historical.datePath} /> : null}
@@ -756,20 +756,68 @@ function Prices({
   );
 }
 
-/** A numbered walkthrough, so the order of the wizard is the order on screen. */
+/**
+ * A numbered walkthrough, so the order of the wizard is the order on screen.
+ *
+ * The marker sits in its own column beside the heading rather than above it, on
+ * a rail running between steps — the shape of a sequence, so it reads as one at
+ * a glance. The heading takes the marker's line height (`leading-7` against
+ * `h-7`) so the two share a centre line; without that the digit floats a few
+ * pixels high and every row looks slightly out of true.
+ *
+ * ⚠ Layout geometry is inline styles, not Tailwind brackets. This addon has no
+ * Tailwind build of its own — it inherits Wealthfolio's compiled stylesheet, so
+ * only utilities the host itself already uses exist. An arbitrary value like
+ * `grid-cols-[1.75rem_1fr]` compiles to nothing and fails silently, which is
+ * exactly how the markers ended up stacked above their headings. Verified in
+ * the running host: standard utilities and theme tokens resolve, opacity
+ * modifiers resolve, bracket values do not.
+ */
 function Steps2({ children }: { children: React.ReactNode }) {
-  return <ol className="space-y-4 border-t pt-4">{children}</ol>;
+  const steps = Children.toArray(children);
+  return (
+    <ol className="mt-1">
+      {steps.map((step, index) =>
+        isValidElement<{ isLast?: boolean }>(step)
+          ? cloneElement(step, { isLast: index === steps.length - 1 })
+          : step,
+      )}
+    </ol>
+  );
 }
 
-function Step2({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+/** Half the marker's width, so the rail runs through its centre. */
+const RAIL_OFFSET = '0.875rem';
+/** The marker's height, so the rail starts where the marker ends. */
+const MARKER_SIZE = '1.75rem';
+
+function Step2({
+  n,
+  title,
+  children,
+  isLast = false,
+}: {
+  n: number;
+  title: string;
+  children: React.ReactNode;
+  /** Set by `Steps2`; the last step ends the rail rather than trailing off. */
+  isLast?: boolean;
+}) {
   return (
-    <li className="grid grid-cols-[1.75rem_1fr] gap-x-3">
-      <span className="flex h-7 w-7 items-center justify-center rounded-full border text-xs font-medium tabular-nums">
+    <li className="relative flex gap-4" style={{ paddingBottom: isLast ? 0 : '1.5rem' }}>
+      {!isLast && (
+        <span
+          aria-hidden
+          className="absolute w-px bg-border"
+          style={{ left: RAIL_OFFSET, top: MARKER_SIZE, bottom: 0 }}
+        />
+      )}
+      <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background text-xs font-medium tabular-nums text-muted-foreground">
         {n}
       </span>
-      <div>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <div className="text-sm text-muted-foreground mt-1 leading-relaxed">{children}</div>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-sm font-semibold leading-7">{title}</h3>
+        <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">{children}</div>
       </div>
     </li>
   );
@@ -815,18 +863,22 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
   return (
     <div className="flex items-center gap-2">
-      <dt className="text-xs text-muted-foreground w-16 shrink-0">{label}</dt>
-      <dd className="flex-1 flex items-center gap-2 min-w-0">
+      <dt className="w-14 shrink-0 text-xs text-muted-foreground">{label}</dt>
+      <dd className="flex min-w-0 flex-1 items-center gap-2">
         <input
           ref={inputRef}
           readOnly
           value={value}
           onFocus={(event) => event.target.select()}
-          className="flex-1 min-w-0 border rounded px-2 py-1 font-mono text-xs bg-muted/30"
+          className="min-w-0 flex-1 rounded border bg-muted/40 px-2 py-1 font-mono text-xs"
         />
-        <Button onClick={copy}>
+        <button
+          type="button"
+          onClick={copy}
+          className="w-20 shrink-0 rounded border px-2 py-1 text-xs transition-colors hover:bg-muted"
+        >
           {state === 'copied' ? 'Copied' : state === 'selected' ? 'Press ⌘C' : 'Copy'}
-        </Button>
+        </button>
       </dd>
     </div>
   );
