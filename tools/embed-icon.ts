@@ -8,7 +8,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const root = resolve(import.meta.dirname, '..');
+// The connector that invoked us — each keeps its own icon.png and broker-icon.ts.
+const root = process.cwd();
 const png = readFileSync(resolve(root, 'icon.png'));
 const uri = `data:image/png;base64,${png.toString('base64')}`;
 

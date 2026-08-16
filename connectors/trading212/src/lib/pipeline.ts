@@ -1,13 +1,14 @@
 import type { ActivityCreate, AddonContext } from '@wealthfolio/addon-sdk';
-import { HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
-import { reconcileAssetCurrencies } from './asset-currency';
-import { createBrokeredFetch } from './brokered-fetch';
-import { clearCredentials } from './credentials';
+import { CREDENTIALS_SECRET_KEY, HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
+import { reconcileAssetCurrencies } from '@wealthfolio-connectors/connector-kit';
+import { createBrokeredFetch } from '@wealthfolio-connectors/connector-kit';
+import { clearCredentials } from '@wealthfolio-connectors/connector-kit';
 import { buildAssetIndex, createRawGet, extractAll } from './extract';
 import type { T212Dataset, T212Source } from './extract';
-import { activityKeyOf, mapDataset } from './mapper';
+import { activityKeyOf, hostCurrency, mapDataset } from './mapper';
 import type { MappedActivity, MappingIssue } from './mapper';
 import {
+  quoteCurrencyFor,
   loadOverrides,
   resolveSymbol,
   resolveUnknownSymbols,
@@ -86,7 +87,7 @@ export interface SyncResult {
  * `Authorization` at all, for the same reason.
  */
 export function source(ctx: AddonContext): T212Source {
-  const fetch = createBrokeredFetch(ctx);
+  const fetch = createBrokeredFetch(ctx, CREDENTIALS_SECRET_KEY);
   return {
     client: new T212({
       apiKey: 'brokered',
@@ -266,7 +267,15 @@ export async function runSync(
   // before anything is revalued — otherwise the wrong unit is baked into every
   // snapshot the recalculation writes.
   progress({ phase: 'Currencies', message: 'Checking what each asset is priced in…' });
-  const currencyFixes = await reconcileAssetCurrencies(ctx, accountId, log);
+  const currencyFixes = await reconcileAssetCurrencies(
+    ctx,
+    accountId,
+    {
+      isOurs: (comment) => activityKeyOf(comment) !== undefined,
+      statedCurrency: (symbol, mic) => hostCurrency(quoteCurrencyFor(symbol, mic)),
+    },
+    log,
+  );
   for (const fix of currencyFixes) {
     if (fix.applied) {
       log('success', `${fix.symbol}: currency corrected from ${fix.was} to ${fix.now}.`);
@@ -389,7 +398,7 @@ export async function resetEverything(
   // reach Trading 212 rather than half-reset and locked out.
   progress({ phase: 'Resetting', message: 'Clearing the saved API credentials…' });
   try {
-    await clearCredentials(ctx);
+    await clearCredentials(ctx, CREDENTIALS_SECRET_KEY);
     log('info', 'API key and secret removed from the keyring.');
   } catch (error) {
     log('warn', `Could not clear the saved credentials: ${describeError(error)}`);

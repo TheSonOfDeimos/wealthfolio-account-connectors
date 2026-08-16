@@ -1,6 +1,24 @@
 import type { Account, AddonContext } from '@wealthfolio/addon-sdk';
-import type { AccountSummary } from 't212-sdk';
-import { LINKED_ACCOUNT_STORAGE_KEY, T212_PROVIDER } from '../config';
+
+/**
+ * The little a connector must know about the account at the far end.
+ *
+ * Deliberately not a broker's own summary type: every provider names these
+ * differently, and this is all the linking needs.
+ */
+export interface BrokerAccount {
+  /** The provider's own account id, stamped on the Wealthfolio account. */
+  id: string | number;
+  currency: string;
+}
+
+/** Where a connector's linkage lives, so two connectors never collide. */
+export interface LinkOptions {
+  /** Stamped on accounts this connector creates, e.g. "TRADING212". */
+  provider: string;
+  /** Addon-storage key holding the linked account id. */
+  storageKey: string;
+}
 
 /**
  * Creating and re-finding the Wealthfolio account that mirrors Trading 212.
@@ -47,13 +65,14 @@ export interface LinkResult {
  */
 export async function findLinkedAccount(
   ctx: AddonContext,
-  summary: Pick<AccountSummary, 'id'>,
+  link: LinkOptions,
+  summary: Pick<BrokerAccount, 'id'>,
   name?: string,
 ): Promise<{ account: Account; foundBy: LinkResult['foundBy'] } | undefined> {
   const accounts = await ctx.api.accounts.getAll();
   const live = accounts.filter((account) => !account.isArchived);
 
-  const rememberedId = await ctx.api.storage.get(LINKED_ACCOUNT_STORAGE_KEY);
+  const rememberedId = await ctx.api.storage.get(link.storageKey);
   const remembered = rememberedId && live.find((account) => account.id === rememberedId);
   if (remembered) return { account: remembered, foundBy: 'storage' };
 
@@ -61,7 +80,7 @@ export async function findLinkedAccount(
   const providerAccountId = String(summary.id);
   const byProvider = live.find(
     (account) =>
-      account.provider === T212_PROVIDER && account.providerAccountId === providerAccountId,
+      account.provider === link.provider && account.providerAccountId === providerAccountId,
   );
   if (byProvider) return { account: byProvider, foundBy: 'provider' };
 
@@ -88,15 +107,16 @@ export async function findLinkedAccount(
  */
 export async function linkOrCreateAccount(
   ctx: AddonContext,
-  summary: AccountSummary,
+  link: LinkOptions,
+  summary: BrokerAccount,
   name: string,
 ): Promise<LinkResult> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error('Give the account a name before creating it.');
 
-  const existing = await findLinkedAccount(ctx, summary, trimmed);
+  const existing = await findLinkedAccount(ctx, link, summary, trimmed);
   if (existing) {
-    await ctx.api.storage.set(LINKED_ACCOUNT_STORAGE_KEY, existing.account.id);
+    await ctx.api.storage.set(link.storageKey, existing.account.id);
     return { account: existing.account, created: false, foundBy: existing.foundBy };
   }
 
@@ -108,12 +128,12 @@ export async function linkOrCreateAccount(
     isActive: true,
     trackingMode: 'TRANSACTIONS',
     group: 'Trading 212',
-    provider: T212_PROVIDER,
+    provider: link.provider,
     providerAccountId: String(summary.id),
   };
 
   const account = await ctx.api.accounts.create(payload);
-  await ctx.api.storage.set(LINKED_ACCOUNT_STORAGE_KEY, account.id);
+  await ctx.api.storage.set(link.storageKey, account.id);
   ctx.api.logger.info(
     `[trading212] Created account ${account.id} (${account.currency}) for Trading 212 ${summary.id}.`,
   );
@@ -128,7 +148,7 @@ export async function linkOrCreateAccount(
  * does mean the account total will never equal the figure Trading 212 shows,
  * and that is worth saying out loud before an import rather than after.
  */
-export function describeMismatch(account: Account, summary: AccountSummary): string | undefined {
+export function describeMismatch(account: Account, summary: BrokerAccount): string | undefined {
   if (account.currency === summary.currency) return undefined;
   return (
     `This account is in ${account.currency} but Trading 212 reports in ${summary.currency}. ` +

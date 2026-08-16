@@ -39,9 +39,20 @@
  */
 
 import type { ActivityDetails, AddonContext } from '@wealthfolio/addon-sdk';
-import { activityKeyOf } from './mapper';
-import { quoteCurrencyFor } from './symbols';
-import { hostCurrency } from './mapper';
+
+/**
+ * What the connector must answer for its own broker.
+ *
+ * Both are broker-specific and neither can be guessed here: only the connector
+ * knows how it stamps its own rows, and only it knows what its broker says a
+ * listing is priced in.
+ */
+export interface CurrencySource {
+  /** True when this activity is one the connector imported. */
+  isOurs: (comment: string | null | undefined) => boolean;
+  /** The broker's stated quote currency for a symbol on a venue, host-spelled. */
+  statedCurrency: (symbol: string, exchangeMic: string | undefined) => string | undefined;
+}
 
 /** One asset whose stored currency did not match Trading 212's. */
 export interface CurrencyFix {
@@ -70,13 +81,14 @@ type ProfileUpdate = Record<string, unknown> & { id: string };
 export async function reconcileAssetCurrencies(
   ctx: AddonContext,
   accountId: string,
+  source: CurrencySource,
   log: (level: 'info' | 'warn' | 'error' | 'success', message: string) => void,
 ): Promise<CurrencyFix[]> {
   // Everything in the account, not just what this run touched: a position
   // closed years ago still prices the days it was open, and still carries the
   // same currency error into every valuation from back then.
   const activities = await ctx.api.activities.getAll(accountId);
-  const ids = assetIds(activities);
+  const ids = assetIds(activities, source.isOurs);
   if (ids.size === 0) {
     log('info', 'No imported securities to check a currency against.');
     return [];
@@ -109,8 +121,7 @@ export async function reconcileAssetCurrencies(
 
     // Matched on venue as well as symbol, so a London listing is not answered
     // for by its American one.
-    const stated = quoteCurrencyFor(symbol, profile.instrumentExchangeMic ?? undefined);
-    const currency = hostCurrency(stated);
+    const currency = source.statedCurrency(symbol, profile.instrumentExchangeMic ?? undefined);
     if (!currency) {
       unknown += 1;
       continue;
@@ -171,10 +182,13 @@ export async function reconcileAssetCurrencies(
  * identified by the key it stamps into every comment — a security you added by
  * hand is yours, and nothing here should rewrite it.
  */
-function assetIds(activities: ActivityDetails[]): Map<string, string> {
+function assetIds(
+  activities: ActivityDetails[],
+  isOurs: (comment: string | null | undefined) => boolean,
+): Map<string, string> {
   const ids = new Map<string, string>();
   for (const activity of activities) {
-    if (!activityKeyOf(activity.comment)) continue;
+    if (!isOurs(activity.comment)) continue;
     const symbol = activity.assetSymbol;
     if (!symbol || !activity.assetId || symbol.startsWith('$CASH')) continue;
     ids.set(symbol, activity.assetId);

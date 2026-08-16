@@ -25,6 +25,6 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "tools"
+    "src"
   ]
 }

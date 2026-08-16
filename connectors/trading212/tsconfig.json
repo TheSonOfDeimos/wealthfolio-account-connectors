@@ -25,6 +25,8 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "tools"
+    "src",
+    "tools",
+    "vite.config.ts"
   ]
 }

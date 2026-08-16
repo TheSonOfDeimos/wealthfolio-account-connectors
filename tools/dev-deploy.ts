@@ -23,7 +23,9 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 
 const WF_URL = (process.env.WF_URL ?? 'http://127.0.0.1:8088').replace(/\/+$/, '');
-const ROOT = resolve(import.meta.dirname, '..');
+// The connector that invoked us, not this file's own location: one tool serves
+// every connector in the workspace, and each runs it from its own directory.
+const ROOT = process.cwd();
 
 interface Manifest {
   id: string;
@@ -44,7 +46,7 @@ try {
   process.exit(1);
 }
 
-const zip = await readFile(resolve(ROOT, `trading212-import-${manifest.version}.zip`));
+const zip = await readFile(resolve(ROOT, `${manifest.id}-${manifest.version}.zip`));
 console.log(`Installing ${manifest.id} ${manifest.version} → ${WF_URL}`);
 
 let response: Response;

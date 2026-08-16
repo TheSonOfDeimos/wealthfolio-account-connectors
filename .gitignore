@@ -9,3 +9,6 @@ dist/
 .env.local
 .env.*.local
 .DS_Store
+
+# Workspace build output
+**/dist/

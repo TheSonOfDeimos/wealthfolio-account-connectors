@@ -13,7 +13,6 @@
  * instead, since they run outside the sandbox and have no keyring to read.
  */
 import type { AddonContext } from '@wealthfolio/addon-sdk';
-import { CREDENTIALS_SECRET_KEY } from '../config';
 
 /**
  * Base64 of `API_KEY:API_SECRET` — the exact string Wealthfolio's keyring must
@@ -29,6 +28,7 @@ export function toBasicSecret(apiKey: string, apiSecret: string): string {
 
 export async function saveCredentials(
   ctx: AddonContext,
+  secretKey: string,
   apiKey: string,
   apiSecret: string,
 ): Promise<void> {
@@ -37,14 +37,14 @@ export async function saveCredentials(
   if (!key || !secret) {
     throw new Error('Both the API key and the API secret are required.');
   }
-  await ctx.api.secrets.set(CREDENTIALS_SECRET_KEY, toBasicSecret(key, secret));
+  await ctx.api.secrets.set(secretKey, toBasicSecret(key, secret));
 }
 
-export async function hasCredentials(ctx: AddonContext): Promise<boolean> {
-  const stored = await ctx.api.secrets.get(CREDENTIALS_SECRET_KEY);
+export async function hasCredentials(ctx: AddonContext, secretKey: string): Promise<boolean> {
+  const stored = await ctx.api.secrets.get(secretKey);
   return Boolean(stored);
 }
 
-export async function clearCredentials(ctx: AddonContext): Promise<void> {
-  await ctx.api.secrets.delete(CREDENTIALS_SECRET_KEY);
+export async function clearCredentials(ctx: AddonContext, secretKey: string): Promise<void> {
+  await ctx.api.secrets.delete(secretKey);
 }

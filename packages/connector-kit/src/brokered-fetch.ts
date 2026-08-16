@@ -1,5 +1,4 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
-import { CREDENTIALS_SECRET_KEY } from '../config';
 
 /**
  * A `fetch`-shaped function that routes t212-sdk's requests through
@@ -20,7 +19,7 @@ import { CREDENTIALS_SECRET_KEY } from '../config';
  * addon's memory at request time; the SDK is constructed with placeholders it
  * never gets to use.
  */
-export function createBrokeredFetch(ctx: AddonContext): typeof fetch {
+export function createBrokeredFetch(ctx: AddonContext, secretKey: string): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
@@ -29,7 +28,7 @@ export function createBrokeredFetch(ctx: AddonContext): typeof fetch {
       method: (init?.method ?? 'GET') as 'GET',
       headers: withoutAuthorization(init?.headers),
       body: typeof init?.body === 'string' ? init.body : undefined,
-      auth: { type: 'basic', secretKey: CREDENTIALS_SECRET_KEY },
+      auth: { type: 'basic', secretKey: secretKey },
     });
 
     return new Response(response.body ?? '', {

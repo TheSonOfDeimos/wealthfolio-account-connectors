@@ -97,3 +97,12 @@ export const MAX_HISTORY_ITEMS = 200;
  * value is retried once on the endpoint's own default.
  */
 export const HISTORY_PAGE_LIMIT = 50;
+
+/**
+ * How this connector identifies itself to the shared kit: which keyring entry
+ * holds its credentials, and how its Wealthfolio account is stamped and found.
+ */
+export const T212_LINK = {
+  provider: T212_PROVIDER,
+  storageKey: LINKED_ACCOUNT_STORAGE_KEY,
+} as const;

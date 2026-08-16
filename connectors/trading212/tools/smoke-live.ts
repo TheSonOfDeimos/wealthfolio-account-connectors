@@ -24,7 +24,7 @@
 import { writeFileSync } from 'node:fs';
 import { T212 } from 't212-sdk';
 import { HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../src/config';
-import { requireCredentials } from './credentials';
+import { requireCredentials } from '../../../tools/credentials';
 import {
   ALL_STREAMS,
   buildAssetIndex,

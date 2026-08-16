@@ -20,7 +20,7 @@ import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { T212 } from 't212-sdk';
 import { EXCHANGE_MIC, T212_ENVIRONMENT } from '../src/config';
-import { requireCredentials } from './credentials';
+import { requireCredentials } from '../../../tools/credentials';
 
 const { apiKey, apiSecret } = requireCredentials();
 

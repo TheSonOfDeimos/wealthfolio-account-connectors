@@ -1,10 +1,10 @@
 import type { Account, AddonContext, SymbolSearchResult } from '@wealthfolio/addon-sdk';
 import type { AccountSummary } from 't212-sdk';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { REVIEW_STORAGE_KEY } from '../config';
+import { CREDENTIALS_SECRET_KEY, REVIEW_STORAGE_KEY, T212_LINK } from '../config';
 import { BROKER_ICON } from '../lib/broker-icon';
-import { describeMismatch, findLinkedAccount, linkOrCreateAccount } from '../lib/account';
-import { hasCredentials, saveCredentials } from '../lib/credentials';
+import { describeMismatch, findLinkedAccount, linkOrCreateAccount } from '@wealthfolio-connectors/connector-kit';
+import { hasCredentials, saveCredentials } from '@wealthfolio-connectors/connector-kit';
 import { resetEverything, runSync, source } from '../lib/pipeline';
 import { loadOverrides, saveOverrides } from '../lib/symbols';
 import type { SymbolReview } from '../lib/symbols';
@@ -47,7 +47,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
     let cancelled = false;
     (async () => {
       try {
-        const present = await hasCredentials(ctx);
+        const present = await hasCredentials(ctx, CREDENTIALS_SECRET_KEY);
         if (cancelled) return;
         setConfigured(present);
         if (!present) return;
@@ -57,7 +57,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
         if (cancelled) return;
         setSummary(live);
 
-        const linked = await findLinkedAccount(ctx, live);
+        const linked = await findLinkedAccount(ctx, T212_LINK, live);
         if (cancelled) return;
         if (!linked) {
           setStep('name');
@@ -127,7 +127,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
 
   const onSaveCredentials = () =>
     run(async () => {
-      await saveCredentials(ctx, apiKey, apiSecret);
+      await saveCredentials(ctx, CREDENTIALS_SECRET_KEY, apiKey, apiSecret);
       setApiKey('');
       setApiSecret('');
       setConfigured(true);
@@ -142,7 +142,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
       append('success', `Connected to Trading 212 account ${live.id} (${live.currency}).`);
 
       // A second run should not be asked to name an account it already has.
-      const linked = await findLinkedAccount(ctx, live);
+      const linked = await findLinkedAccount(ctx, T212_LINK, live);
       if (linked) {
         setAccount(linked.account);
         setStep('ready');
@@ -157,7 +157,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
   const onCreateAccount = () =>
     run(async () => {
       if (!summary) return;
-      const linked = await linkOrCreateAccount(ctx, summary, accountName);
+      const linked = await linkOrCreateAccount(ctx, T212_LINK, summary, accountName);
       setAccount(linked.account);
       append(
         'success',
