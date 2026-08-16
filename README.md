@@ -1,329 +1,134 @@
-# Trading 212 → Wealthfolio adapter
+# Wealthfolio account connectors
 
-A [Wealthfolio](https://wealthfolio.app) addon that imports your whole Trading
-212 history — trades, dividends, deposits, withdrawals, interest and charges —
-and keeps it in step afterwards.
+**Connect your brokers and banks to [Wealthfolio](https://wealthfolio.app) — and
+import your account data in the currency your provider recorded it in.**
 
-Its guiding rule is that **nothing is invented**. Every amount stays in the
-currency Trading 212 recorded it in, with the broker's own conversion rate
-attached so Wealthfolio does the arithmetic itself. Nothing is inferred from a
-ticker string. Where the broker does not state something, the addon says so
-rather than guessing.
+[![CI](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/actions/workflows/ci.yml/badge.svg)](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/actions/workflows/ci.yml)
+[![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL%20v3-blue.svg)](LICENSE)
+[![Wealthfolio](https://img.shields.io/badge/wealthfolio-%E2%89%A5%203.6.2-6c8f4a.svg)](https://wealthfolio.app)
+[![Node](https://img.shields.io/badge/node-%E2%89%A5%2020-5a5a5a.svg)](https://nodejs.org)
+
+Wealthfolio keeps your portfolio on your own machine. Getting your history *into*
+it is the tedious part: exporting CSVs, fixing tickers by hand, and discovering
+six months later that a London holding was priced in pence and quietly counted a
+hundred times over.
+
+These connectors do that job properly, for one provider each.
+
+## The one rule
+
+**Nothing is invented.**
+
+Every amount stays in the currency the provider recorded it in, with the
+provider's own conversion rate attached so Wealthfolio does the arithmetic
+itself. Symbols come from fields the provider states outright, never parsed out
+of a ticker string. Where a provider does not say something — withholding tax
+split out of a dividend, a corporate action's terms — the connector says so and
+leaves it for you, rather than filling the gap with a plausible number.
+
+A guess that is right most of the time is worse than no guess, because nothing
+prompts you to check the rest.
+
+## Connectors
+
+| Provider | Type | Status | Imports |
+| --- | --- | --- | --- |
+| [Trading 212](connectors/trading212) | Broker | **Working** | Trades, dividends, deposits, withdrawals, interest, fees and taxes |
+
+Adding one? See [Writing a connector](#writing-a-connector).
+
+## Install a connector
+
+You need Wealthfolio 3.6.2 or newer.
+
+1. Download the connector's `.zip` from the latest [CI run][ci] (the
+   `trading212-addon` artifact), or build it yourself:
+
+   ```bash
+   pnpm install
+   cd connectors/trading212 && pnpm bundle
+   ```
+
+2. In Wealthfolio: **Settings → Add-ons → Add-on Manager → +** and pick the zip.
+3. Open the connector from the sidebar and follow the four steps: paste your API
+   credentials, name the account, confirm the import, then keep it in sync.
+
+Your credentials go into Wealthfolio's own keyring. The connector never reads
+them back — the host attaches them to each request itself — and nothing but
+*Reset everything* removes them.
+
+[ci]: https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/actions/workflows/ci.yml
+
+## Layout
 
 ```
-Trading 212  ──►  extract  ──►  mapper  ──►  saveMany  ──►  reconcile  ──►  recalculate
- orders            (all           (one       (writes       (asset          (Wealthfolio
- dividends          history        activity    activities    currencies      revalues)
- transactions       streams)       per event)  + assets)     vs T212)
- positions              ▲
- instruments            │ brokered fetch: host-attached auth, allowlisted host
- exchanges            Wealthfolio addon sandbox
+connectors/          one directory per provider, each a self-contained addon
+  trading212/          manifest, icon, src/, its own tools/ and README
+packages/
+  connector-kit/       what every connector needs, and nothing broker-specific
+tools/               dev-deploy and icon embedding, usable from any connector
+docker/              a local Wealthfolio to test against
+.vscode/             workspace, tasks and debug configs
 ```
 
-## What it does
+The split between a connector and the kit is decided by one question: **would a
+second provider need this?** Sandbox egress, keyring credentials, account
+linking and the asset-currency repair would — so they are in the kit. Anything
+that knows what a Trading 212 order looks like stays in the connector.
 
-- **Imports the full history.** Filled orders, dividends, deposits and
-  withdrawals, interest on free cash, and every charge — each as its own
-  activity, keyed by Trading 212's own record id so a re-run never doubles up.
-- **Keeps every currency as the broker recorded it.** A US trade stays in
-  dollars, a London one in pence. Trading 212's conversion rate rides along on
-  the activity; no conversion happens behind your back.
-- **Resolves symbols from what Trading 212 states**, never from the ticker
-  string. `ABML_US_EQ` is `ABAT`, because the company renamed and the code did
-  not follow — a parsing rule that looked 88% right mapped holdings to the
-  wrong companies, silently.
-- **Corrects the currency Wealthfolio assigns to each asset.** Wealthfolio
-  derives it from the exchange, so every London listing becomes pence — right
-  for the pence lines, and a 100× error for the ones quoted in pounds or
-  dollars. Each sync checks and repairs this.
-- **Flags what it cannot settle.** A holding priced far from Trading 212's
-  quote is reported as a probable wrong security, with a box to correct the
-  symbol; the correction is saved and applied on the next sync.
-- **Reconciles.** Cash lands within pennies of Trading 212's own figure, and
-  the totals are checked against the broker's.
-
-Corporate actions beyond share splits, and withholding tax on foreign
-dividends, are deliberately **not** mapped — Trading 212 does not report them
-separately, and a number there would be a guess. See *Not yet covered*.
-
-## Repository layout
-
-| Path | What lives there |
-| --- | --- |
-| [manifest.json](manifest.json) | Addon identity, sidebar entry, permissions, allowed hosts. |
-| [src/addon.tsx](src/addon.tsx) | Entry point: registers the route, captures the host context. |
-| [src/config.ts](src/config.ts) | Environment, storage keys, history limits. No secrets. |
-| [src/lib/](src/lib/) | `extract` (everything read from Trading 212), `mapper` (translation), `account` (create/re-find the Wealthfolio account), `brokered-fetch` (sandbox egress), `credentials` (keyring), `symbols` (resolution + corrections), `asset-currency` (quote-currency repair), `pipeline` (the run). |
-| [src/pages/](src/pages/) | The import page. |
-| [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only extraction report against the real Trading 212 API. |
-| [scripts/reconcile-docker.ts](scripts/reconcile-docker.ts) | Replays a ledger into the Docker instance and checks the cash balance against Trading 212. |
-| [compose.yml](compose.yml) | A local Wealthfolio instance for testing the addon. |
-| [.vscode/](.vscode/) | Workspace with tasks and debug configs. |
-
-## Setup
+## Working on it
 
 Requires Node 20+ and pnpm.
 
 ```bash
-pnpm install
-pnpm verify      # type-check + production build
+pnpm install          # links the workspace
+pnpm verify           # type-check and build every package
+pnpm docker:up        # a Wealthfolio instance on :8088 to test against
 ```
 
-### Your Trading 212 credentials
-
-Generate a key pair in the Trading 212 mobile app (Settings → API):
-<https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key>
-
-Read access is all this needs. Every call it makes is a `GET`; it never places,
-amends or cancels an order.
-
-**In the addon**, you paste the pair into its first setup step. It goes
-straight into Wealthfolio's keyring, survives restarts and reinstalls, and the
-addon never reads it back — the host attaches it to each request itself. The
-only thing that clears it is *Reset everything*.
-
-**For the Node scripts** — `pnpm smoke:live` and `pnpm symbols:generate`, which
-run outside the sandbox and have no keyring — copy `.env.example` to `.env` and
-fill it in:
+Then, from a connector:
 
 ```bash
-cp .env.example .env
+cd connectors/trading212
+pnpm dev:deploy       # build, zip, install into the running Wealthfolio
 ```
 
-`.env` is git-ignored. Nothing in the tracked source holds a secret, and
-nothing secret is compiled into `dist/addon.js`. An earlier version kept the
-pair in `src/config.ts`, which put a live key into the git history and every
-built bundle; that history has been rewritten and the key revoked.
+Reload the Wealthfolio tab to pick up the new build. There is more on the Docker
+instance and the inner development loop in
+[connectors/trading212/README.md](connectors/trading212/README.md), including how
+to attach Wealthfolio's own frontend dev server.
 
-## Checking it works
+## Writing a connector
 
-There is no test suite — the addon is exercised against the real Trading 212
-API and a real Wealthfolio instance.
+1. Copy `connectors/trading212` as a starting point, or start from an empty
+   directory with a `manifest.json`, `package.json` and `src/addon.tsx`.
+2. Depend on `@wealthfolio-connectors/connector-kit` and use it for the parts
+   that are not about your provider: `createBrokeredFetch` for sandbox egress,
+   `saveCredentials`/`hasCredentials` for the keyring, `linkOrCreateAccount` for
+   the Wealthfolio account, and `reconcileAssetCurrencies` for the currency
+   repair below.
+3. Write the provider-specific half: reading its API, and mapping its records to
+   Wealthfolio activities.
+4. Add your connector to the table above.
 
-### Against the real Trading 212 API
+Three things that cost the most to learn the first time, and will bite any
+connector:
 
-```bash
-pnpm smoke:live                     # 200 items per history stream
-pnpm smoke:live -- --full           # walk the whole history
-pnpm smoke:live -- --streams=summary,positions
-pnpm smoke:live -- --json=out.json  # dump the raw dataset
-```
+- **A quote currency is not a trade currency.** Wealthfolio derives an asset's
+  currency from its exchange, so every London listing becomes pence — correct
+  for the pence lines and a 100× error for the ones quoted in pounds or dollars.
+  The kit repairs this, but only if you tell it what your provider states.
+- **Never infer market data from an identifier.** Trading 212's `ABML_US_EQ` is
+  `ABAT`: the company renamed and the code did not follow. A parsing rule that
+  looked 88% correct mapped holdings to the wrong companies, silently.
+- **Check against the running host, not the types.** Both SDKs involved describe
+  their backends inaccurately in places — fields declared and never sent, fields
+  sent and never declared. Compiling is not evidence.
 
-Drives [src/lib/extract.ts](src/lib/extract.ts) — the same module, the same
-calls, the same order the addon uses inside Wealthfolio — and prints what came
-back: per-stream timings, the ledger with its Trading 212 source ids, a census
-of every event type seen, one dossier per instrument the account has touched,
-current prices, and the reconciliation checks. Nothing is written; Wealthfolio
-is not involved.
+## Contributing
 
-It exits non-zero if a stream fails or if two events share a source id, so it
-doubles as a regression check on the extraction layer.
-
-Three things it settled on a real account:
-
-- **Interest is reachable over REST.** `/equity/history/transactions` returns
-  `INTEREST_ON_FREE_CASH` rows, despite `t212-sdk` typing `TransactionType`
-  without them. No CSV export is needed.
-- **`t212-sdk` cannot paginate `/history/transactions`.** That endpoint's
-  `nextPagePath` carries `cursor` *and* `time`; the SDK extracts only `cursor`
-  and the API replies "Both or none of cursorId and time must be provided".
-  Every history stream therefore paginates through our own transport, which
-  replays `nextPagePath` verbatim.
-- **London listings are quoted in pence.** `currencyCode` is `GBX` and
-  `currentPrice x quantity` is exactly 100x the value Trading 212 reports for
-  the position. `toMajorUnits` does the scaling; the price check proves it,
-  landing all twelve GBX positions on a ratio of 1.0000.
-
-### Does the ledger reproduce Trading 212's cash?
-
-```bash
-pnpm smoke:live -- --full --json=full.json
-pnpm reconcile -- --dataset=full.json
-```
-
-Maps the ledger with the same `mapDataset` the addon uses, replays it into the
-Docker instance, and compares the resulting cash balance with the one Trading
-212 reports. Cash is the sharp test: it depends on nothing but the ledger —
-every deposit, trade, charge, dividend and interest payment in its own currency
-— so a match means the mapping is arithmetically sound. Exits non-zero on a
-drift over 2p.
-
-It writes over the container's REST API rather than through the addon host, so
-it proves the numbers, not the addon's plumbing. It deletes its probe account
-afterwards unless you pass `--keep`. A truncated ledger can never reconcile;
-`--full` is not optional here.
-
-## A Wealthfolio instance in Docker
-
-Wealthfolio publishes a server build that runs the *same* addon host as the
-desktop app — verified: `POST /api/v1/addons/<id>/network/request` is served by
-the same handler, so the network broker this addon depends on is present.
-
-```bash
-cp .env.docker.example .env.docker
-echo "WF_SECRET_KEY=$(openssl rand -base64 32)" >> .env.docker
-docker compose --env-file .env.docker up -d
-```
-
-Then open <http://127.0.0.1:8088> — the `Wealthfolio: open in editor` task
-does it in VS Code's Simple Browser.
-
-> **Not Safari.** Safari cannot host Wealthfolio's addon sandbox: the host
-> renders addons in an `<iframe sandbox="allow-scripts" srcdoc=…>` and then
-> dynamically imports `blob:` URLs from it, which WebKit blocks from an opaque
-> origin. The addon times out with *"Failed to start add-on"* before any of its
-> code runs. Chromium browsers — including VS Code's Simple Browser — are fine.
-
-Then install `trading212-import-0.1.0.zip` through Settings → Addons → **+**.
-The file picker reads from your machine, not the container, so nothing needs
-mounting.
-
-Two differences from the desktop app:
-
-- Credentials land in an encrypted file inside the container volume (keyed by
-  `WF_SECRET_KEY`), not your OS keyring.
-- Addon dev mode is compiled out of release builds, so there is no hot reload
-  against this instance. Rebuild and reinstall the zip.
-
-The compose file binds to `127.0.0.1` and disables auth, which is safe only
-because nothing off this machine can reach it. Don't expose it without setting
-up authentication — see [upstream compose.yml](https://github.com/wealthfolio/wealthfolio/blob/main/compose.yml)
-for the password-hash and OIDC options.
-
-## The development loop
-
-Three options, cheapest first.
-
-**1. Mapper changes — `pnpm smoke:live`.** Same mapping code, real Trading 212
-data, no install step, ~2s. Debuggable with F5 in VS Code. Wealthfolio only
-becomes necessary once you are testing `checkImport` / `import` behaviour.
-
-**2. Against the container — the `Addon: deploy to Wealthfolio` task.** Runs
-the full bundle (clean → type-check → build → zip) and pushes the zip to the
-container's `POST /addons/install-zip` — the same call the "Install from file"
-button makes. About 2.5s. Deliberately explicit rather than save-triggered.
-Reinstalling preserves stored secrets, so credentials survive each round. The
-browser tab needs a manual reload: the frontend loads addons at startup and
-nothing external can re-trigger that.
-
-```bash
-pnpm dev:deploy              # WF_URL=… to point elsewhere
-```
-
-**3. True hot reload — the paved path.** Wealthfolio's addon dev server works
-against its frontend running in Vite dev mode, which can talk to the
-containerised backend. No Rust toolchain and no Tauri build required; the
-container stays as the backend.
-
-```bash
-# once, in a clone of wealthfolio/wealthfolio
-pnpm install
-
-# terminal 1 — frontend in addon-dev mode, proxying to our container
-VITE_API_TARGET=http://127.0.0.1:8088 pnpm dev:addons     # serves :1420
-
-# terminal 2 — in this repo (needs @wealthfolio/addon-dev-tools back)
-pnpm add -D @wealthfolio/addon-dev-tools@^3.6.2
-npx wealthfolio-addon dev                                  # serves :3001
-```
-
-Open <http://localhost:1420>. The frontend runs with `import.meta.env.DEV`
-true, which is the flag that enables addon dev mode, so it discovers
-`localhost:3001`, polls `/status`, and re-mounts the addon on every rebuild —
-no reinstall, no tab reload. `compose.yml` already allows CORS from `:1420`.
-
-## Safety notes
-
-- The addon talks to **live.trading212.com** — your real account. Every call it
-  makes is a `GET`; it never places, amends, or cancels an order. To rehearse
-  against paper money, set `T212_ENVIRONMENT` in
-  [src/config.ts](src/config.ts) to `'demo'`
-  **and** add `demo.trading212.com` to `network.allowedHosts` in
-  [manifest.json](manifest.json) — the broker refuses any host
-  the manifest does not declare.
-- The only write is into Wealthfolio, behind the preview and an explicit click.
-- Symbols come from Trading 212's instrument catalogue
-  (`GET /equity/metadata/instruments`), not from parsing the ticker — its
-  format is undocumented. An instrument missing from the catalogue (a delisted
-  name still in your history) keeps its raw Trading 212 ticker, which
-  Wealthfolio will reject visibly; fix those with `SYMBOL_OVERRIDES` in
-  [src/config.ts](src/config.ts). The ISIN travels in each activity's comment
-  so a wrong symbol stays traceable.
-- **Settled — currencies and rates.** `fill.price` is quoted in the
-  *instrument's* currency, and `fill.walletImpact.fxRate` **divides**:
-  `|price x quantity| / fxRate` reproduces the wallet impact, the remainder
-  being the fill's own charges. Verified across every `TRADE` fill in a live
-  account — 76 exact, 119 explained by charges, 0 unexplained; `pnpm
-  smoke:live` prints the arithmetic under "Fill pricing".
-
-## The mapping contract
-
-One rule: **record what Trading 212 recorded, and convert nothing.** Prices keep
-the currency they were quoted in, charges keep the currency they were charged
-in, and no exchange rate is derived or applied to an amount. Where Trading 212
-does not report a figure, none is invented.
-
-Three host behaviours shape the output. All three were verified against a real
-Wealthfolio 3.6.3 instance, not assumed:
-
-| Verified | Consequence |
-| --- | --- |
-| `fxRate` **multiplies** (`base = local x fxRate`) | Trading 212's rate divides, so the mapper sends `1 / fxRate`. Sending 1.3469 unchanged produced £1346.90 where £742.45 was correct — wrong by its own square. |
-| `GBX` and `GBp` are **normalised natively** | 2922 GBX x 8 stored as £233.76, matching Trading 212's `netValue` exactly. The mapper sends the raw pence price and `fxRate: 1`; scaling here would divide twice. |
-| `fee` is read **in the row's currency** | A GBP charge on a USD row is silently counted as USD, so charges leave as their own `FEE`/`TAX` activities in the currency they were charged. |
-
-On a live account this maps 505 events to 613 activities with zero warnings —
-`BUY` rows in USD, GBX, CAD, EUR and GBP, each keeping its own currency.
-
-## Not yet covered
-
-- **Corporate actions.** `STOCK_SPLIT` and friends are extracted and reported,
-  never guessed at. Splits need the running quantity from a chronological
-  replay, since Trading 212 reports a share delta where Wealthfolio wants a
-  ratio — and it models one split as a paired sell and buy.
-- **Dividend withholding tax.** Not recoverable: `amount` is net of both
-  withholding *and* a currency conversion, `tickerCurrency` is absent from the
-  response despite being typed as required, and no per-dividend rate is given.
-  The gross per share is preserved in the comment instead.
-- **Prices and incremental sync.** No `quotes.update`, so market values come
-  from Wealthfolio's own provider, and no persisted high-water mark — each run
-  re-reads the same window rather than resuming.
-
-The addon can now create its own account ([src/lib/account.ts](src/lib/account.ts)),
-named by you and denominated in Trading 212's currency so cash needs no
-conversion. It is stamped with `provider: TRADING212` and the Trading 212
-account id, and re-found on later runs by stored id, then provider, then name —
-so a second run adopts the account instead of duplicating it. This needs the
-`accounts.create` permission, which is a re-consent prompt on upgrade.
-
-Two things the API cannot give at all: price history (there is no candles
-endpoint, only a live `currentPrice` per poll) and pie attribution (order
-history carries no pie id).
-
-## References
-
-- [Trading 212 Public API](https://docs.trading212.com/api) (v0, beta)
-- [Wealthfolio addon docs](https://github.com/wealthfolio/wealthfolio/blob/main/docs/addons/addon-getting-started.md)
-- [`@wealthfolio/addon-sdk`](https://www.npmjs.com/package/@wealthfolio/addon-sdk)
-
-## On the `t212-sdk` dependency
-
-The Trading 212 API layer is [`t212-sdk`](https://github.com/codeledge/t212-sdk)
-(MIT), **pinned to an exact version** rather than a caret range, so an upgrade
-is always a deliberate act. It was audited before adoption: no install scripts,
-unminified shipped code, no `eval`/`child_process`/`fs`/DOM access, and the only
-URL literals in the bundle are `live.trading212.com` and `demo.trading212.com`
-— its base URL is not user-configurable. The published tarball matches the
-public source at that commit. Its two declared dependencies are never imported
-by the shipped code.
-
-Its weakness is obscurity, not conduct: ~70 downloads a month, one maintainer,
-and a `v2` sitting unreleased on `main`. Two things bound the risk — the SDK is
-bundled into `dist/addon.js` and pinned by the lockfile, so a later bad version
-cannot reach a built addon; and every request it makes passes through the host's
-`allowedHosts` check, which holds whether or not the library behaves.
-
-Treat any version bump as a re-audit. The diff is small enough to read.
+Fixes, providers this does not cover yet, and instruments it maps badly — all
+welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 
@@ -331,17 +136,18 @@ Treat any version bump as a re-audit. The diff is small enough to read.
 
 Use it for anything, change it however you like. The one obligation: **if you
 distribute a modified version, or let other people use one over a network, you
-must publish your source under the AGPL too.** Improving this addon privately
+must publish your source under the AGPL too.** Improving a connector privately
 for your own portfolio owes nothing to anyone; the moment others use your
 version, they get the same rights you did.
 
-That is the whole point of the choice. Fixes should come back, and a fork that
-quietly gets better while everyone else's copy does not is exactly what this
-licence prevents. See [CONTRIBUTING.md](CONTRIBUTING.md).
+That is the point of the choice. Fixes should come back, and a fork should not
+quietly get better while everyone else's copy stays as it is.
 
-## Trademarks
+## Trademarks and warranty
 
-"Trading 212" and its logo are trademarks of Trading 212. They are used here to
-identify the broker this addon connects to. This project is not published by,
-endorsed by, or affiliated with Trading 212, and comes with no warranty — read
-the code before pointing it at your portfolio.
+Provider names and logos belong to their owners and are used here to identify
+the service each connector talks to. This project is not published by, endorsed
+by, or affiliated with any of them.
+
+No warranty. These connectors write to your portfolio — read the code before
+pointing one at real money, and keep a backup of your Wealthfolio database.

@@ -1,0 +1,79 @@
+# Type-check and build every connector and package in the workspace.
+#
+# There is no unit-test suite to run: what this project gets wrong is never
+# arithmetic in isolation, it is what a broker actually returns and what
+# Wealthfolio actually stores — neither of which a mock can tell you. Those are
+# checked against the real API and a real Wealthfolio instance, by hand, before
+# release. CI's job is the part a machine does better than a person: proving
+# every package still compiles and bundles, on a clean checkout, with no
+# credentials and no network beyond the registry.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  # So the badge can be refreshed without an empty commit.
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Type-check and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches `engines.node`; the cache key comes from the lockfile.
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        # Fails if the lockfile disagrees with any package.json, which is the
+        # point: a lockfile that drifts is a build that works only on the
+        # machine it was last run on.
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check and build every package
+        run: pnpm verify
+
+      - name: Check the addon bundles
+        working-directory: connectors/trading212
+        run: pnpm package
+
+      - name: Keep the built addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading212-addon
+          path: connectors/trading212/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  secrets:
+    name: No credentials in the tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Whole history: a secret is only really gone if it is gone from
+          # every commit, which this repo learned the hard way.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

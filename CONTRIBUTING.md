@@ -47,19 +47,29 @@ A few practical things:
 ## Running it
 
 ```sh
-pnpm install
-cp .env.example .env      # only needed for the Node scripts below
-pnpm verify               # type-check and build
-pnpm dev:deploy           # build and push into a local Wealthfolio
+pnpm install                      # links the workspace
+cp .env.example .env              # only for the Node tools below
+pnpm verify                       # type-check and build every package
+pnpm docker:up                    # a Wealthfolio on :8088 to test against
+
+cd connectors/trading212
+pnpm dev:deploy                   # build, zip, install into it
 ```
 
 The addon itself never reads `.env` — it asks for your Trading 212 key pair in
 its own form and keeps it in Wealthfolio's keyring. `.env` is only for
-`pnpm smoke:live` and `pnpm symbols:generate`, which run under Node where there
-is no keyring.
+`pnpm smoke:live` and `pnpm symbols:generate` inside a connector, which run
+under Node where there is no keyring.
+
+## Where things live
+
+A connector lives in `connectors/<provider>/`. Anything a *second* provider
+would also need belongs in `packages/connector-kit/` instead — sandbox egress,
+keyring credentials, account linking, the asset-currency repair. If it knows
+what one broker's order looks like, it stays in the connector.
 
 ## Trademarks
 
-"Trading 212" and its logo belong to Trading 212. They appear here to identify
-the broker this addon connects to. This project is not published by, endorsed
-by, or affiliated with them.
+Provider names and logos belong to their owners, and appear here to identify the
+service each connector talks to. This project is not published by, endorsed by,
+or affiliated with any of them.
