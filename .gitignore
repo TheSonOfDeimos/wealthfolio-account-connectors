@@ -14,6 +14,8 @@ dist/
 # and every transaction they ever made — `--json` writes one by design, and it
 # should not be one `git add -A` away from being published.
 *-dataset.json
+# Local diagnostic dumps: they contain holdings, activity ids and ledger rows.
+.diag-*
 full.json
 
 # Workspace build output

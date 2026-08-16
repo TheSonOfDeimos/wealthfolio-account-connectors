@@ -565,43 +565,57 @@ function ProviderGuide() {
       </Step2>
 
       <Step2 n={2} title="Provider mode → Both">
-        Three modes are offered. Pick <strong>Both</strong> (“series + override”) — it is the only
-        one with a historical endpoint, and without history every chart stays empty and every
-        return is computed from a single point.
+        Three cards sit at the top. Pick <strong>Both</strong> (“series + override”) — it is the
+        only one that gives you a historical endpoint, and without history every chart stays
+        empty and every return is computed from a single point. Two tabs appear underneath:{' '}
+        <strong>Latest price</strong> and <strong>Historical</strong>. You fill in both.
       </Step2>
 
-      <Step2 n={3} title="Source type → JSON API">
-        Kraken returns JSON, so choose <strong>JSON API</strong> (“REST returning JSON”), not Web
-        Page, HTML Table or CSV.
-      </Step2>
-
-      <Step2 n={4} title="Provider identity">
+      <Step2 n={3} title="Provider name">
+        Scroll to <strong>Provider identity</strong> and type the name exactly. <strong>Code</strong>{' '}
+        fills itself in and cannot be edited — which is why the name has to match: it is what
+        this addon looks for when it checks whether the provider is in place.
         <dl className="space-y-1.5 pt-1">
           <CopyField label="Name" value={QUOTE_PROVIDER.name} />
-          <CopyField label="Code" value={QUOTE_PROVIDER.id} />
         </dl>
-        <p className="text-xs text-muted-foreground mt-2">
-          The code must match exactly — it is what this addon looks for when it checks whether
-          the provider is in place.
-        </p>
       </Step2>
 
-      <Step2 n={5} title="Configure Latest endpoint">
-        Paste the <strong>URL template</strong>, then under{' '}
-        <strong>Field mapping (latest)</strong> set <strong>Price</strong>.
+      <Step2 n={4} title="Latest price tab">
+        Set <strong>Source type</strong> to <strong>JSON API</strong> (“REST returning JSON”),
+        paste the <strong>URL template</strong>, then under <strong>Map response fields</strong>{' '}
+        set <strong>Price</strong>. Leave <strong>As of</strong> empty here.
         <dl className="space-y-1.5 pt-1">
           <CopyField label="URL" value={latest?.url ?? ''} />
           <CopyField label="Price" value={latest?.pricePath ?? ''} />
         </dl>
       </Step2>
 
-      <Step2 n={6} title="Configure Historical endpoint">
-        Same again for the historical URL, then map six fields under{' '}
-        <strong>Field mapping (historical)</strong>.
+      <Step2 n={5} title="Historical tab">
+        Switch to <strong>Historical</strong>. Source type <strong>JSON API</strong> again, paste
+        its own URL, then map <strong>Price</strong> and — this one matters —{' '}
+        <strong>As of</strong>.
         <dl className="space-y-1.5 pt-1">
           <CopyField label="URL" value={historical?.url ?? ''} />
           <CopyField label="Price" value={historical?.pricePath ?? ''} />
-          {historical?.datePath ? <CopyField label="Date" value={historical.datePath} /> : null}
+          {historical?.datePath ? <CopyField label="As of" value={historical.datePath} /> : null}
+        </dl>
+        <div className="pt-2">
+          <Note tone="warn">
+            <strong>As of</strong> is the field the dates come from, and the series cannot be
+            built without it. Do not put this path in <strong>Date format</strong> — that is a
+            different field, further down, and it expects a format like{' '}
+            <code>%Y-%m-%d</code> rather than a path. A provider with the path in the wrong box
+            saves happily, fetches happily, and stores nothing.
+          </Note>
+        </div>
+      </Step2>
+
+      <Step2 n={6} title="Historical → More mappings & options">
+        Expand it and set the four candle fields. Leave <strong>Date format</strong>{' '}
+        <em>empty</em> — Kraken sends unix seconds, which Wealthfolio detects on its own. Set{' '}
+        <strong>Date timezone</strong> to <strong>UTC</strong>, because that is what Kraken
+        timestamps are.
+        <dl className="space-y-1.5 pt-1">
           {historical?.openPath ? <CopyField label="Open" value={historical.openPath} /> : null}
           {historical?.highPath ? <CopyField label="High" value={historical.highPath} /> : null}
           {historical?.lowPath ? <CopyField label="Low" value={historical.lowPath} /> : null}
@@ -612,22 +626,34 @@ function ProviderGuide() {
         <p className="text-xs text-muted-foreground mt-2">
           Kraken returns each candle as{' '}
           <code>[time, open, high, low, close, vwap, volume, count]</code>, which is why the paths
-          index by position and Price is <code>[4]</code>.
+          index by position — Price is <code>[4]</code> and As of is <code>[0]</code>.
         </p>
       </Step2>
 
-      <Step2 n={7} title="Create provider">
-        The form's checklist should show <strong>Provider name</strong>,{' '}
-        <strong>URL template</strong> and <strong>Required fields mapped</strong> all satisfied.
-        If it offers a live preview, test with symbol <code>SOL</code> — a price should come back.
-        Then click <strong>Create provider</strong>.
+      <Step2 n={7} title="Test before saving">
+        On the right, put <code>SOL</code> in <strong>Test symbol</strong> and press{' '}
+        <strong>Fetch</strong>, on both tabs. The checklist at the bottom should end up with{' '}
+        <strong>URL template</strong>, <strong>Fetch succeeds</strong>,{' '}
+        <strong>Required fields mapped</strong> and <strong>Provider name</strong> all ticked.
       </Step2>
 
-      <Step2 n={8} title="Come back here">
+      <Step2 n={8} title="Create provider">
+        Click <strong>Create provider</strong>. The card should then show{' '}
+        <strong>Kraken Ticker</strong> with its switch on.
+      </Step2>
+
+      <Step2 n={9} title="Rebuild History">
+        Back on <strong>Settings → Market Data</strong>, click <strong>Rebuild History</strong>{' '}
+        and confirm. Creating the provider does not re-price anything on its own: assets already
+        carrying another provider's history keep it until a rebuild replaces it. This takes a few
+        minutes and runs in the background.
+      </Step2>
+
+      <Step2 n={10} title="Come back here">
         Continue below. Straight after the import this addon checks whether the prices really
         came from Kraken, and the Prices panel will say either way.
       </Step2>
-      </Steps2>
+    </Steps2>
   );
 }
 
