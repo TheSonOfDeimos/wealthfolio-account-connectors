@@ -1,36 +1,50 @@
 # Trading 212 → Wealthfolio adapter
 
-A Wealthfolio addon that reads filled orders from Trading 212 and imports them
-as BUY/SELL activities.
+A [Wealthfolio](https://wealthfolio.app) addon that imports your whole Trading
+212 history — trades, dividends, deposits, withdrawals, interest and charges —
+and keeps it in step afterwards.
 
-This is the hello-world slice: it authenticates, pulls one window of order
-history, maps it to Wealthfolio's import format, shows a preview, and writes
-the rows you approve. It is deliberately small, but every layer it touches is
-the real one.
+Its guiding rule is that **nothing is invented**. Every amount stays in the
+currency Trading 212 recorded it in, with the broker's own conversion rate
+attached so Wealthfolio does the arithmetic itself. Nothing is inferred from a
+ticker string. Where the broker does not state something, the addon says so
+rather than guessing.
 
 ```
-Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  checkImport  ──►  import
- /history/orders   (client)      (src/lib/mapper.ts)          (preview)      (write)
-                      ▲
-                      │ brokered fetch: host-attached auth, allowlisted host
-                    Wealthfolio addon sandbox
+Trading 212  ──►  extract  ──►  mapper  ──►  saveMany  ──►  reconcile  ──►  recalculate
+ orders            (all           (one       (writes       (asset          (Wealthfolio
+ dividends          history        activity    activities    currencies      revalues)
+ transactions       streams)       per event)  + assets)     vs T212)
+ positions              ▲
+ instruments            │ brokered fetch: host-attached auth, allowlisted host
+ exchanges            Wealthfolio addon sandbox
 ```
 
-## What it does today
+## What it does
 
-- Stores your Trading 212 API key/secret in the OS keyring via the addon
-  secrets API — never in the bundle, never in `localStorage`.
-- Calls `GET /equity/account/summary` and `GET /equity/history/orders` through
-  Wealthfolio's network broker (the sandbox blocks direct `fetch`).
-- Uses [`t212-sdk`](https://github.com/codeledge/t212-sdk) for the API itself —
-  cursor pagination, rate-limit pacing, and typed responses generated from
-  Trading 212's own schema.
-- Maps each `TRADE` fill to a Wealthfolio activity, splitting Trading 212's
-  charges into `fee` (commission, FX conversion, FINRA, PTM) and `tax` (stamp
-  duty, SDRT, French FTT).
-- Skips corporate actions (splits, stock dividends) instead of forcing them
-  into a BUY, and reports what it skipped.
-- Previews with `checkImport` — read-only — before anything is written.
+- **Imports the full history.** Filled orders, dividends, deposits and
+  withdrawals, interest on free cash, and every charge — each as its own
+  activity, keyed by Trading 212's own record id so a re-run never doubles up.
+- **Keeps every currency as the broker recorded it.** A US trade stays in
+  dollars, a London one in pence. Trading 212's conversion rate rides along on
+  the activity; no conversion happens behind your back.
+- **Resolves symbols from what Trading 212 states**, never from the ticker
+  string. `ABML_US_EQ` is `ABAT`, because the company renamed and the code did
+  not follow — a parsing rule that looked 88% right mapped holdings to the
+  wrong companies, silently.
+- **Corrects the currency Wealthfolio assigns to each asset.** Wealthfolio
+  derives it from the exchange, so every London listing becomes pence — right
+  for the pence lines, and a 100× error for the ones quoted in pounds or
+  dollars. Each sync checks and repairs this.
+- **Flags what it cannot settle.** A holding priced far from Trading 212's
+  quote is reported as a probable wrong security, with a box to correct the
+  symbol; the correction is saved and applied on the next sync.
+- **Reconciles.** Cash lands within pennies of Trading 212's own figure, and
+  the totals are checked against the broker's.
+
+Corporate actions beyond share splits, and withholding tax on foreign
+dividends, are deliberately **not** mapped — Trading 212 does not report them
+separately, and a number there would be a guess. See *Not yet covered*.
 
 ## Repository layout
 
@@ -38,8 +52,8 @@ Trading 212  ──►  t212-sdk  ──►  mapOrdersToActivities  ──►  c
 | --- | --- |
 | [manifest.json](manifest.json) | Addon identity, sidebar entry, permissions, allowed hosts. |
 | [src/addon.tsx](src/addon.tsx) | Entry point: registers the route, captures the host context. |
-| [src/config.ts](src/config.ts) | Credentials, environment, history limits. |
-| [src/lib/](src/lib/) | `extract` (everything read from Trading 212), `mapper` (translation), `account` (create/re-find the Wealthfolio account), `brokered-fetch` (sandbox egress), `credentials` (keyring), `sync` (pipeline). |
+| [src/config.ts](src/config.ts) | Environment, storage keys, history limits. No secrets. |
+| [src/lib/](src/lib/) | `extract` (everything read from Trading 212), `mapper` (translation), `account` (create/re-find the Wealthfolio account), `brokered-fetch` (sandbox egress), `credentials` (keyring), `symbols` (resolution + corrections), `asset-currency` (quote-currency repair), `pipeline` (the run). |
 | [src/pages/](src/pages/) | The import page. |
 | [scripts/smoke-live.ts](scripts/smoke-live.ts) | Read-only extraction report against the real Trading 212 API. |
 | [scripts/reconcile-docker.ts](scripts/reconcile-docker.ts) | Replays a ledger into the Docker instance and checks the cash balance against Trading 212. |
@@ -60,17 +74,26 @@ pnpm verify      # type-check + production build
 Generate a key pair in the Trading 212 mobile app (Settings → API):
 <https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key>
 
-`DEV_CREDENTIALS` in [src/config.ts](src/config.ts) is the one place they live
-during development. Fill it in and the addon moves the pair into the OS keyring
-on first start, while `pnpm smoke:live` reads it directly to call the API from
-Node.
+Read access is all this needs. Every call it makes is a `GET`; it never places,
+amends or cancels an order.
 
-Anything you put there is compiled into `dist/addon.js` in plaintext and the
-file is tracked by git, so keep local edits out of your diffs with
-`git update-index --skip-worktree src/config.ts`, and clear it before sharing a
-build. Leave it empty and the addon asks for the pair in its settings form
-instead — the right way round for a shared addon, and the only path that keeps
-credentials out of the bundle entirely.
+**In the addon**, you paste the pair into its first setup step. It goes
+straight into Wealthfolio's keyring, survives restarts and reinstalls, and the
+addon never reads it back — the host attaches it to each request itself. The
+only thing that clears it is *Reset everything*.
+
+**For the Node scripts** — `pnpm smoke:live` and `pnpm symbols:generate`, which
+run outside the sandbox and have no keyring — copy `.env.example` to `.env` and
+fill it in:
+
+```bash
+cp .env.example .env
+```
+
+`.env` is git-ignored. Nothing in the tracked source holds a secret, and
+nothing secret is compiled into `dist/addon.js`. An earlier version kept the
+pair in `src/config.ts`, which put a live key into the git history and every
+built bundle; that history has been rewritten and the key revoked.
 
 ## Checking it works
 
@@ -301,3 +324,24 @@ cannot reach a built addon; and every request it makes passes through the host's
 `allowedHosts` check, which holds whether or not the library behaves.
 
 Treat any version bump as a re-audit. The diff is small enough to read.
+
+## Licence
+
+[GNU AGPL v3](LICENSE).
+
+Use it for anything, change it however you like. The one obligation: **if you
+distribute a modified version, or let other people use one over a network, you
+must publish your source under the AGPL too.** Improving this addon privately
+for your own portfolio owes nothing to anyone; the moment others use your
+version, they get the same rights you did.
+
+That is the whole point of the choice. Fixes should come back, and a fork that
+quietly gets better while everyone else's copy does not is exactly what this
+licence prevents. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Trademarks
+
+"Trading 212" and its logo are trademarks of Trading 212. They are used here to
+identify the broker this addon connects to. This project is not published by,
+endorsed by, or affiliated with Trading 212, and comes with no warranty — read
+the code before pointing it at your portfolio.
