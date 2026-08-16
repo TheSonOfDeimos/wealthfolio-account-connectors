@@ -1,0 +1,95 @@
+# Publish a connector's zip as a GitHub Release when it lands on main.
+#
+# Releases are cut per connector and keyed to the version in that connector's
+# manifest, so the tag names the thing a user installs: `trading212-v0.1.0`.
+#
+# Every merge runs this, but a release only appears when a connector's version
+# is one that has not been released before. That guard is deliberate: most
+# merges are docs, refactors and fixes to a version already published, and
+# re-releasing an unchanged artifact under a new tag would leave users unable to
+# tell which download is the one they want. To ship, bump `version` in the
+# connector's manifest.json in the same merge.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # Cut a release by hand — useful to re-run a publish that failed after the
+  # tag was created.
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish changed connectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build every package
+        run: pnpm verify
+
+      - name: Publish a release for each connector whose version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          published=0
+
+          for manifest in connectors/*/manifest.json; do
+            dir=$(dirname "$manifest")
+            name=$(jq -r .name "$manifest")
+            version=$(jq -r .version "$manifest")
+            tag="$(basename "$dir")-v${version}"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "· $name $version already released as $tag — skipping."
+              continue
+            fi
+
+            echo "· Packaging $name $version"
+            ( cd "$dir" && pnpm package )
+
+            zip=$(ls "$dir"/*.zip | head -1)
+            if [ ! -f "$zip" ]; then
+              echo "No zip produced for $name" >&2
+              exit 1
+            fi
+
+            gh release create "$tag" "$zip" \
+              --title "$name $version" \
+              --notes "$(printf '%s\n' \
+                "Install: **Wealthfolio → Settings → Add-ons → Add-on Manager → +**, then pick \`$(basename "$zip")\`." \
+                "" \
+                "Your API credentials are entered in the addon itself and kept in Wealthfolio's keyring." \
+                "" \
+                "See [$dir/README.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/$dir/README.md) for what this connector imports and what it deliberately does not." \
+                "" \
+                "Licensed under the GNU AGPL v3.")"
+
+            published=$((published + 1))
+          done
+
+          if [ "$published" -eq 0 ]; then
+            echo "No connector version changed; nothing to release."
+          fi

@@ -10,8 +10,10 @@
 name: CI
 
 on:
+  # Every commit on every branch, not just the default one: the point of CI
+  # here is to catch a package that stopped compiling, and that is worth
+  # knowing on the branch where it happened rather than after a merge.
   push:
-    branches: [master, main]
   pull_request:
   # So the badge can be refreshed without an empty commit.
   workflow_dispatch:
