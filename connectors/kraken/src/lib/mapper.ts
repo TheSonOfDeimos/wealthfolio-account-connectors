@@ -35,7 +35,13 @@
  */
 import type { AssetInfo, InstantBuy, KrakenDataset } from './extract';
 import { displaySymbol, groupByRefid, ledgerKind, pairInstantBuys } from './extract';
-import { CRYPTO_QUOTE_CURRENCY, FIAT_CURRENCIES, KRAKEN_PROVIDER } from '../config';
+import {
+  ASSET_NAMES,
+  CRYPTO_QUOTE_CURRENCY,
+  FIAT_CURRENCIES,
+  KRAKEN_PROVIDER,
+  SYMBOL_OVERRIDES,
+} from '../config';
 
 /** An activity as `saveMany` accepts it, including the fields the SDK omits. */
 export interface MappedActivity {
@@ -91,9 +97,21 @@ export interface MapOptions {
  * Kraken's ids are stable and unique, so they are the key — no hashing, and no
  * stamping into a comment the way the Trading 212 connector had to before the
  * backend was found to accept `sourceRecordId`.
+ *
+ * Scoped to the Wealthfolio account, because the host treats an idempotency key
+ * as globally unique rather than unique per account. Without the account in the
+ * key, importing the same Kraken history into a second account is refused
+ * outright — "Duplicate activity detected" — which is exactly what happened the
+ * first time the reconciliation tool ran against a host that already held a
+ * real import.
  */
-export function idempotencyKeyFor(sourceId: string): string {
-  return `kraken:${sourceId}`;
+export function idempotencyKeyFor(accountId: string, sourceId: string): string {
+  return `kraken:${accountId}:${sourceId}`;
+}
+
+/** The prefix every key for one account shares, for stripping it back off. */
+export function keyPrefixFor(accountId: string): string {
+  return `kraken:${accountId}:`;
 }
 
 /** True when an activity came from this connector. */
@@ -133,7 +151,11 @@ export function mapDataset(
   const issues: MappingIssue[] = [];
   const assets = dataset.assets;
 
-  const symbolOf = (code: string): string | undefined => displaySymbol(assets, code);
+  // Your correction first, then the display name Kraken states. The smoke test
+  // points at `SYMBOL_OVERRIDES` when an asset will not resolve, so it has to
+  // be a table something actually reads.
+  const symbolOf = (code: string): string | undefined =>
+    SYMBOL_OVERRIDES[code] ?? displaySymbol(assets, code);
   const isFiat = (code: string): boolean => {
     const symbol = symbolOf(code);
     return symbol !== undefined && FIAT_CURRENCIES.has(symbol);
@@ -144,7 +166,7 @@ export function mapDataset(
     activityDate: new Date(row.time * 1000).toISOString(),
     sourceSystem: KRAKEN_PROVIDER,
     sourceRecordId: sourceId,
-    idempotencyKey: idempotencyKeyFor(sourceId),
+    idempotencyKey: idempotencyKeyFor(accountId, sourceId),
   });
 
   // The quote currency names the *price feed*, never the trade. Passing the
@@ -155,7 +177,17 @@ export function mapDataset(
     if (!symbol) return undefined;
     // `kind` is not advisory: without it the host classifies an unrecognised
     // coin as an equity. Verified — GRT was stored as EQUITY.
-    return { symbol, kind: 'CRYPTO' as const, quoteCcy: CRYPTO_QUOTE_CURRENCY };
+    //
+    // `name` is supplied for the same reason: left unset, the host names the
+    // asset from whatever its market-data provider matched, and Yahoo called
+    // Kraken's `CC` "CloudCoin USD" — a different coin. Kraken's code is the
+    // only name this connector can state, so it is the default.
+    return {
+      symbol,
+      kind: 'CRYPTO' as const,
+      quoteCcy: CRYPTO_QUOTE_CURRENCY,
+      name: ASSET_NAMES[symbol] ?? symbol,
+    };
   };
 
   // ── Purchases ────────────────────────────────────────────────────────────
@@ -166,7 +198,7 @@ export function mapDataset(
   const { buys, unpaired } = pairInstantBuys(dataset.ledgers);
   for (const buy of buys) {
     const result = mapPurchase(buy, { accountId, options, assets, symbolOf, isFiat, assetFor, base });
-    if (result.activity) activities.push(result.activity);
+    activities.push(...result.activities);
     if (result.issue) issues.push(result.issue);
   }
   for (const row of unpaired) {
@@ -420,14 +452,15 @@ function mapPurchase(
     assetFor: (code: string) => MappedActivity['asset'];
     base: (row: { time: number }, sourceId: string) => Omit<MappedActivity, 'activityType' | 'currency' | 'comment'>;
   },
-): { activity?: MappedActivity; issue?: MappingIssue } {
-  const { symbolOf, isFiat, assetFor, base } = context;
+): { activities: MappedActivity[]; issue?: MappingIssue } {
+  const { options, symbolOf, isFiat, assetFor, base } = context;
 
   const spentSymbol = symbolOf(buy.spent.asset) ?? buy.spent.asset;
   const receivedSymbol = symbolOf(buy.received.asset);
 
   if (!receivedSymbol) {
     return {
+      activities: [],
       issue: {
         kind: 'skipped',
         sourceId: buy.refid,
@@ -436,25 +469,11 @@ function mapPurchase(
     };
   }
 
-  // Paying in crypto or a stablecoin is the case Wealthfolio cannot represent:
-  // it would resolve the currency as an FX pair — `BTCUSD=X` — that does not
-  // exist, store the row, and never price it.
-  if (!isFiat(buy.spent.asset)) {
-    return {
-      issue: {
-        kind: 'skipped',
-        sourceId: buy.refid,
-        message:
-          `Bought ${receivedSymbol} with ${spentSymbol}, which Wealthfolio cannot price as a ` +
-          'currency, and Kraken states no fiat equivalent. Left out rather than valued at a made-up rate.',
-      },
-    };
-  }
-
   // The receive leg can carry its own fee, deducted in the asset received.
   const quantity = buy.received.amount - buy.received.fee;
   if (quantity <= 0) {
     return {
+      activities: [],
       issue: {
         kind: 'skipped',
         sourceId: buy.refid,
@@ -463,23 +482,109 @@ function mapPurchase(
     };
   }
 
+  // ── Paid for in crypto ───────────────────────────────────────────────────
+  //
+  // Wealthfolio cannot hold an activity denominated in `TRX` or `USDG`: it
+  // resolves the currency as an FX pair — `TRXUSD=X` — that does not exist, so
+  // the row is stored and then never priced. Kraken states no fiat equivalent
+  // for the exchange, and inventing one is out of the question.
+  //
+  // Dropping the pair entirely was the first answer, and it was the wrong one.
+  // It traded a cost this connector does not know for a *quantity* it does:
+  // both legs state their amounts outright, so skipping them left the spent
+  // coin still in the portfolio and the bought one missing. On a live account
+  // that put TRX 461.03 too high and CC 911.31 too low — every other asset
+  // matched Kraken to eight decimals.
+  //
+  // So the movement is recorded and only the cost is withheld: the spent coin
+  // leaves, the bought coin arrives, both at zero, both flagged. Quantities
+  // then match Kraken exactly, and what is unknown is marked unknown rather
+  // than being allowed to corrupt what is known.
+  if (!isFiat(buy.spent.asset)) {
+    const spentAsset = assetFor(buy.spent.asset);
+    if (!spentAsset) {
+      return {
+        activities: [],
+        issue: {
+          kind: 'skipped',
+          sourceId: buy.refid,
+          message:
+            `Paid with ${buy.spent.asset}, which is not in Kraken's asset catalogue, so what ` +
+            'left the account cannot be identified. Left out.',
+        },
+      };
+    }
+
+    const note =
+      `Kraken ${buy.refid} · exchanged ${decimal(buy.spent.amount)} ${spentSymbol}` +
+      `${buy.spent.fee ? ` + ${decimal(buy.spent.fee)} fee` : ''}` +
+      ` for ${decimal(buy.received.amount)} ${receivedSymbol}` +
+      `${buy.received.fee ? ` - ${decimal(buy.received.fee)} fee` : ''}` +
+      ' · Kraken states no fiat value for this exchange, so it is recorded at zero cost';
+
+    // Two rows, so two keys. An idempotency key has to be unique per activity,
+    // and both legs share one Kraken refid.
+    const out = base(buy, buy.refid);
+    const into = base(buy, buy.refid);
+    out.idempotencyKey = idempotencyKeyFor(context.accountId, `${buy.refid}:out`);
+    into.idempotencyKey = idempotencyKeyFor(context.accountId, `${buy.refid}:in`);
+
+    return {
+      activities: [
+        {
+          ...out,
+          activityType: 'TRANSFER_OUT',
+          asset: spentAsset,
+          quantity: decimal(buy.spent.amount + buy.spent.fee),
+          unitPrice: '0',
+          amount: '0',
+          currency: options.accountCurrency,
+          comment: note,
+          needsReview: true,
+        },
+        {
+          ...into,
+          activityType: 'TRANSFER_IN',
+          asset: assetFor(buy.received.asset),
+          quantity: decimal(quantity),
+          unitPrice: '0',
+          amount: '0',
+          currency: options.accountCurrency,
+          comment: note,
+          needsReview: true,
+        },
+      ],
+      issue: {
+        kind: 'warning',
+        sourceId: buy.refid,
+        message:
+          `${decimal(buy.received.amount)} ${receivedSymbol} was bought with ${spentSymbol}, not ` +
+          'with money. The quantities are recorded exactly as Kraken states them, but it gives no ' +
+          'fiat value for the exchange, so both sides carry a zero cost and are flagged for review.',
+      },
+    };
+  }
+
+  // ── Paid for in fiat ─────────────────────────────────────────────────────
   return {
-    activity: {
-      ...base(buy, buy.refid),
-      activityType: 'BUY',
-      asset: assetFor(buy.received.asset),
-      quantity: decimal(quantity),
-      unitPrice: decimal(buy.spent.amount / quantity),
-      amount: decimal(buy.spent.amount),
-      currency: spentSymbol,
-      ...(buy.spent.fee ? { fee: decimal(buy.spent.fee) } : {}),
-      comment:
-        `Kraken ${buy.refid} · spent ${decimal(buy.spent.amount)} ${spentSymbol}` +
-        `${buy.spent.fee ? ` + ${decimal(buy.spent.fee)} fee` : ''}` +
-        `, received ${decimal(buy.received.amount)} ${receivedSymbol}` +
-        `${buy.received.fee ? ` - ${decimal(buy.received.fee)} fee` : ''}` +
-        ' · unit price derived from those two figures',
-    },
+    activities: [
+      {
+        ...base(buy, buy.refid),
+        activityType: 'BUY',
+        asset: assetFor(buy.received.asset),
+        quantity: decimal(quantity),
+        unitPrice: decimal(buy.spent.amount / quantity),
+        amount: decimal(buy.spent.amount),
+        currency: spentSymbol,
+        ...(buy.spent.fee ? { fee: decimal(buy.spent.fee) } : {}),
+        comment:
+          `Kraken ${buy.refid} · spent ${decimal(buy.spent.amount)} ${spentSymbol}` +
+          `${buy.spent.fee ? ` + ${decimal(buy.spent.fee)} fee` : ''}` +
+          `, received ${decimal(buy.received.amount)} ${receivedSymbol}` +
+          `${buy.received.fee ? ` - ${decimal(buy.received.fee)} fee` : ''}` +
+          ' · unit price derived from those two figures',
+      },
+    ],
   };
 }
 

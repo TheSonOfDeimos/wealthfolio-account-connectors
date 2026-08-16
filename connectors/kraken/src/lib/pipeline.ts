@@ -15,13 +15,13 @@ import {
   ACCOUNT_CURRENCY_STORAGE_KEY,
   LINKED_ACCOUNT_STORAGE_KEY,
   MAX_HISTORY_ITEMS,
-  REVIEW_STORAGE_KEY,
 } from '../config';
 import { checkLedgerContinuity, extractAll } from './extract';
 import type { KrakenDataset } from './extract';
-import { isOurs, mapDataset, summarise } from './mapper';
+import { isOurs, keyPrefixFor, mapDataset, summarise } from './mapper';
 import type { MappedActivity, MappingIssue } from './mapper';
 import { createSource, KRAKEN_KEYS } from './source';
+import { reconcileAssetNames } from './assets';
 
 export type LogLevel = 'info' | 'success' | 'warn' | 'error';
 
@@ -108,9 +108,14 @@ export async function runSync(
   // match and cannot stop the walk. That costs nothing in practice: rewards are
   // paid far more often than purchases are made, so the newest row is almost
   // always one that does match.
+  const prefix = keyPrefixFor(accountId);
   const knownIds =
     mode === 'incremental'
-      ? new Set([...existing.keys()].map((key) => key.replace(/^kraken:/, '')))
+      ? new Set(
+          [...existing.keys()]
+            .filter((key) => key.startsWith(prefix))
+            .map((key) => key.slice(prefix.length)),
+        )
       : undefined;
   const bounded = mode === 'incremental' && existing.size > 0;
   if (mode === 'incremental' && !bounded) {
@@ -222,17 +227,36 @@ export async function runSync(
   // An import introduces assets Wealthfolio has never seen, and on a fresh
   // install it has fetched neither their prices nor the rates between their
   // currencies and yours. Left alone it reports both as data-health problems.
-  progress({ phase: 'Market data', message: 'Fetching prices and exchange rates…' });
+  //
+  // Scoped to this account's holdings rather than `syncHistory()`, which
+  // refreshes the whole portfolio and timed out at around two and a half
+  // minutes on twenty assets — twice. A connector has no business refreshing
+  // securities it did not import, and the unscoped call gets slower with every
+  // account a user adds.
+  progress({ phase: 'Market data', message: 'Fetching prices…' });
   try {
-    await ctx.api.market.syncHistory();
-    log('success', 'Prices and exchange rates refreshed.');
+    const holdings = await ctx.api.portfolio.getHoldings(accountId);
+    const assetIds = holdings
+      .map((holding) => holding.instrument?.id)
+      .filter((id): id is string => Boolean(id));
+
+    if (assetIds.length > 0) {
+      await ctx.api.market.sync(assetIds, false);
+      log('success', `Prices refreshed for ${assetIds.length} asset(s).`);
+    }
   } catch (error) {
-    log('warn', `Could not refresh market data: ${describeError(error)}`);
+    log('warn', `Could not refresh prices: ${describeError(error)}`);
   }
 
   progress({ phase: 'Recalculating', message: 'Asking Wealthfolio to revalue the portfolio…' });
   await ctx.api.portfolio.recalculate();
   await settle(ctx, accountId, progress);
+
+  // Names Wealthfolio took from a market-data provider can belong to a
+  // different coin entirely — Yahoo's `CC` is CloudCoin, not Kraken's Canton
+  // Coin. Only names stated in `ASSET_NAMES` are corrected.
+  progress({ phase: 'Assets', message: 'Checking asset names…' });
+  await reconcileAssetNames(ctx, accountId, log);
 
   // Kraken values the whole account itself, in USD, and that is the only
   // outside opinion available on whether the prices Wealthfolio found are the
@@ -245,14 +269,6 @@ export async function runSync(
   await reportValuation(ctx, accountId, dataset, log);
 
   const counts = summarise({ activities, issues });
-  try {
-    await ctx.api.storage.set(
-      REVIEW_STORAGE_KEY,
-      JSON.stringify(issues.slice(0, 200)),
-    );
-  } catch {
-    // A review that cannot be remembered is not worth failing a sync over.
-  }
 
   log('success', 'Done.');
   return { mode, imported, duplicates, deleted, invalid, issues, dataset, counts };
@@ -408,7 +424,7 @@ export async function resetEverything(
   }
 
   progress({ phase: 'Resetting', message: 'Forgetting the linked account…' });
-  for (const key of [LINKED_ACCOUNT_STORAGE_KEY, ACCOUNT_CURRENCY_STORAGE_KEY, REVIEW_STORAGE_KEY]) {
+  for (const key of [LINKED_ACCOUNT_STORAGE_KEY, ACCOUNT_CURRENCY_STORAGE_KEY]) {
     try {
       await ctx.api.storage.delete(key);
     } catch {

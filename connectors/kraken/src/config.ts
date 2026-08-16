@@ -127,31 +127,69 @@ export const CRYPTO_QUOTE_CURRENCY = 'USD';
  * The addon cannot create this itself: the SDK has no custom-provider API, and
  * the host's own REST API is not reachable from the sandbox. So the connector
  * detects its absence by trying it, and shows these values for a one-time
- * paste into Settings → Market Data.
+ * setup in Settings → Market Data. Wealthfolio's Add Provider dialog is a form
+ * rather than a JSON import, so each value is offered with its own copy button
+ * instead of one blob.
  */
-export const QUOTE_PROVIDER = {
+/** One source of a custom provider, as Wealthfolio's Add Provider form takes it. */
+export interface QuoteSource {
+  kind: 'latest' | 'historical';
+  format: 'json';
+  url: string;
+  pricePath: string;
+  datePath?: string;
+  openPath?: string;
+  highPath?: string;
+  lowPath?: string;
+  volumePath?: string;
+}
+
+export const QUOTE_PROVIDER: {
+  id: string;
+  name: string;
+  sources: QuoteSource[];
+  priority: number;
+} = {
   id: 'kraken-ticker',
   name: 'Kraken Ticker',
-  format: 'json',
-  kind: 'latest',
   /**
-   * The quote currency is pinned to USD rather than expanded from
-   * `{CURRENCY}`, which resolves to the *asset's* currency. A GBP-quoted asset
-   * made that template ask Kraken for `ARKMGBP`, a pair that does not exist,
-   * and the sync failed for eight assets at once. Kraken lists nearly
-   * everything against USD and almost nothing against sterling.
+   * Two sources, and both are needed.
+   *
+   * `latest` alone gives today's price and nothing else, which leaves every
+   * chart empty and every return figure meaningless — a portfolio with one
+   * quote per asset has no past to plot. Kraken's OHLC endpoint supplies 721
+   * daily candles, about two years, which is more history than any account
+   * opened recently can use.
    */
-  url: 'https://api.kraken.com/0/public/Ticker?pair={SYMBOL}USD',
-  /**
-   * The wildcard is load-bearing. Kraken re-keys some pairs in its response —
-   * a request for `XBTUSD` comes back under `XXBTZUSD` — so an exact key match
-   * works for every asset except Bitcoin, which is the worst possible one to
-   * quietly miss.
-   */
-  pricePath: '$.result.*.c[0]',
+  sources: [
+    {
+      kind: 'latest',
+      format: 'json',
+      url: `${KRAKEN_BASE_URL}/0/public/Ticker?pair={SYMBOL}${CRYPTO_QUOTE_CURRENCY}`,
+      /**
+       * The wildcard is load-bearing. Kraken re-keys some pairs in its
+       * response — a request for `XBTUSD` comes back under `XXBTZUSD`, `ETHUSD`
+       * under `XETHZUSD` — so an exact key match works for most assets and
+       * silently fails on the majors, which are the worst ones to miss.
+       */
+      pricePath: '$.result.*.c[0]',
+    },
+    {
+      kind: 'historical',
+      format: 'json',
+      url: `${KRAKEN_BASE_URL}/0/public/OHLC?pair={SYMBOL}${CRYPTO_QUOTE_CURRENCY}&interval=1440`,
+      /** `[time, open, high, low, close, vwap, volume, count]` per candle. */
+      pricePath: '$.result.*[*][4]',
+      datePath: '$.result.*[*][0]',
+      openPath: '$.result.*[*][1]',
+      highPath: '$.result.*[*][2]',
+      lowPath: '$.result.*[*][3]',
+      volumePath: '$.result.*[*][6]',
+    },
+  ],
   /** Above Yahoo, so Kraken wins wherever it can answer. */
   priority: 1,
-} as const;
+};
 
 /**
  * Kraken balance suffixes, and what they mean.
@@ -176,8 +214,6 @@ export const API_SECRET_SECRET_KEY = 'kraken-api-secret';
 /** Addon storage keys. */
 export const LINKED_ACCOUNT_STORAGE_KEY = 'linked-account-id';
 export const ACCOUNT_CURRENCY_STORAGE_KEY = 'account-currency';
-export const LAST_LEDGER_ID_STORAGE_KEY = 'last-ledger-id';
-export const REVIEW_STORAGE_KEY = 'asset-review';
 
 /**
  * Stamped on accounts this connector creates, alongside the Kraken account id.
@@ -190,6 +226,29 @@ export const KRAKEN_LINK = {
   storageKey: LINKED_ACCOUNT_STORAGE_KEY,
   label: 'Kraken',
 } as const;
+
+/**
+ * Human-readable names for Kraken's asset codes.
+ *
+ * Kraken's API speaks only in codes. `/0/public/Assets` returns `aclass`,
+ * `altname`, `decimals`, `status` and `margin_rate`; `AssetPairs` gets as far
+ * as `wsname: "CC/USD"`; the private Earn endpoints report `asset: "ADA"`.
+ * Nothing anywhere serves "Canton Coin" — that name exists on Kraken's website
+ * and in its app, and in no response this connector can make.
+ *
+ * Left to itself, Wealthfolio names a new asset from whatever its market-data
+ * provider matched, and Yahoo's crypto tickers collide with Kraken's: `CC-USD`
+ * is **CloudCoin**, a different coin trading at roughly twice Canton Coin's
+ * price. The holding and its price were right; only the label was another
+ * asset's.
+ *
+ * So the default is Kraken's own code — plain, and never wrong. Add an entry
+ * here to give one a proper name; it is your knowledge stated explicitly in
+ * the source, which is a different thing from the code guessing.
+ */
+export const ASSET_NAMES: Record<string, string> = {
+  CC: 'Canton Coin',
+};
 
 /**
  * Symbol corrections, keyed by Kraken's display name.

@@ -14,8 +14,8 @@ import {
   LINKED_ACCOUNT_STORAGE_KEY,
   QUOTE_PROVIDER,
 } from '../config';
-import { applyKrakenPricing, readPricing } from '../lib/quotes';
-import type { ApplyResult } from '../lib/quotes';
+import { applyKrakenPricing, readPricing } from '../lib/assets';
+import type { ApplyResult } from '../lib/assets';
 import { createSource, KRAKEN_KEYS } from '../lib/source';
 import { displaySymbol, fetchAssets } from '../lib/extract';
 import { resetEverything, runSync } from '../lib/pipeline';
@@ -544,20 +544,41 @@ function Prices({
             the button again.
           </Note>
           <p className="text-sm">
-            Go to <strong>Settings → Market Data → Custom Providers → Add Provider</strong> and
-            fill in:
+            Go to <strong>Settings → Market Data → Custom Providers → Add Provider</strong>, fill
+            in the provider, then add <strong>both</strong> sources.
           </p>
           <dl className="space-y-2">
             <CopyField label="Code" value={QUOTE_PROVIDER.id} />
             <CopyField label="Name" value={QUOTE_PROVIDER.name} />
-            <CopyField label="URL" value={QUOTE_PROVIDER.url} />
-            <CopyField label="Price path" value={QUOTE_PROVIDER.pricePath} />
           </dl>
+
+          {QUOTE_PROVIDER.sources.map((source) => (
+            <div key={source.kind} className="border-t pt-3 space-y-2">
+              <p className="text-xs font-medium">
+                Source: <strong>{source.kind === 'latest' ? 'Latest price' : 'Historical'}</strong>{' '}
+                <span className="font-normal text-muted-foreground">
+                  ({source.format.toUpperCase()})
+                  {source.kind === 'historical'
+                    ? ' — without this one every chart stays empty'
+                    : null}
+                </span>
+              </p>
+              <dl className="space-y-2">
+                <CopyField label="URL" value={source.url} />
+                <CopyField label="Price" value={source.pricePath} />
+                {source.datePath ? <CopyField label="Date" value={source.datePath} /> : null}
+                {source.openPath ? <CopyField label="Open" value={source.openPath} /> : null}
+                {source.highPath ? <CopyField label="High" value={source.highPath} /> : null}
+                {source.lowPath ? <CopyField label="Low" value={source.lowPath} /> : null}
+                {source.volumePath ? <CopyField label="Volume" value={source.volumePath} /> : null}
+              </dl>
+            </div>
+          ))}
+
           <p className="text-xs text-muted-foreground">
-            Leave the source as <strong>JSON</strong> / <strong>Latest price</strong>. Keep the{' '}
-            <code>*</code> in the price path: Kraken re-keys some pairs in its response — a request
-            for <code>XBTUSD</code> comes back under <code>XXBTZUSD</code> — so an exact key would
-            work for everything except Bitcoin.
+            Keep every <code>*</code> exactly as shown. Kraken re-keys some pairs in its response —
+            a request for <code>XBTUSD</code> comes back under <code>XXBTZUSD</code> — so an exact
+            key would work for most coins and silently fail on Bitcoin and Ether.
           </p>
           <Button onClick={onApply} disabled={busy} primary>
             {busy ? 'Checking…' : "I've added it — try again"}

@@ -33,6 +33,7 @@ Kraken  ──►  extract  ──►  mapper  ──►  saveMany  ──►  r
 | [src/lib/extract.ts](src/lib/extract.ts) | Every stream, the pagination, and the joins the mapper needs. |
 | [src/lib/mapper.ts](src/lib/mapper.ts) | Kraken records → Wealthfolio activities. |
 | [src/lib/pipeline.ts](src/lib/pipeline.ts) | A sync end to end: fetch, map, write, revalue. |
+| [src/lib/assets.ts](src/lib/assets.ts) | Correcting the price source and the name Wealthfolio gave each asset. |
 | [src/pages/ImportPage.tsx](src/pages/ImportPage.tsx) | The wizard, then the control panel. |
 | [tools/smoke-live.ts](tools/smoke-live.ts) | Live smoke test against a real account. |
 | [tools/probe-host.ts](tools/probe-host.ts) | What Wealthfolio does with the rows this sends. |
@@ -184,9 +185,67 @@ than written**, and `FIAT_CURRENCIES` in [src/config.ts](src/config.ts) is the
 line between the two. On the account this was built against, 22 of 24 purchases
 were paid in GBP and importable; two were paid in TRX and USDG and were not.
 
+## Prices come from Kraken, not Yahoo
+
+Wealthfolio prices crypto through Yahoo, whose symbol space is not Kraken's, and
+it is wrong in two directions at once. It has no entry at all for `GRT`, `TAO`,
+`BABY` or `CC`. For others it resolves a **different instrument** and returns a
+confident, wrong number: `USDG-USD` quotes about $5.45 for a dollar stablecoin,
+and `CC-USD` is CloudCoin — not the Canton Coin that Kraken's `CC` actually is,
+and roughly twice the price.
+
+A wrong price is worse than a missing one, because nothing looks broken.
+
+So the connector offers a **custom Wealthfolio provider** reading Kraken's own
+public endpoints — no API key, and the venue the holdings actually sit on:
+
+| Source | Endpoint | Gives |
+| --- | --- | --- |
+| Latest | `/0/public/Ticker` | the current price |
+| Historical | `/0/public/OHLC?interval=1440` | 721 daily candles, about two years |
+
+Both are needed. Without the historical one every chart is empty and every
+return figure is computed against a single point.
+
+The addon **cannot create the provider**: the SDK has no custom-provider API,
+and the host's own REST API is unreachable from the sandbox. Nor can it ask
+whether one exists — `market.getProviders()` returns the built-in provider
+*types*, never a configured custom one. So it detects absence by trying, and
+then shows every field with a copy button for a one-time setup under
+**Settings → Market Data → Custom Providers**. It can assign a provider to an
+asset, which it does through `providerConfig`.
+
+Two details that cost time to find:
+
+- **Keep the `*` in every path.** Kraken re-keys some pairs in its response — a
+  request for `XBTUSD` comes back under `XXBTZUSD`, `ETHUSD` under `XETHZUSD` —
+  so an exact key works for most coins and silently fails on the majors.
+- **Pin the pair to `USD`, never `{CURRENCY}`.** That placeholder expands to the
+  *asset's* currency, so a GBP-quoted asset asks Kraken for `ARKMGBP`, a pair
+  that does not exist. Eight assets failed at once that way.
+
+## Asset names
+
+Kraken's API speaks only in codes. `/0/public/Assets` returns `aclass`,
+`altname`, `decimals` and `status`; `AssetPairs` gets as far as
+`wsname: "CC/USD"`; the private Earn endpoints report `asset: "ADA"`. Nothing
+serves a human-readable name — "Canton Coin" exists on Kraken's website and in
+no response this connector can make.
+
+Left alone, Wealthfolio names a new asset from whatever its provider matched,
+which is how `CC` became "CloudCoin USD". So the default name is Kraken's own
+code, and [`ASSET_NAMES`](src/config.ts) is where a proper one goes — your
+knowledge stated in the source, rather than the code guessing. Only names listed
+there are corrected on an existing asset: for the majors the provider's name is
+right, and overwriting one you set by hand would be worse than the problem.
+
 ## Not yet covered
 
-- **Crypto-quoted purchases**, for the reason above.
+- **The cost of a crypto-for-crypto exchange.** Buying CC with USDG moves two
+  quantities Kraken states exactly, and Kraken gives no fiat value for the
+  swap. Both sides are recorded at zero cost and flagged, so the holdings match
+  the exchange while the cost basis stays honestly unknown. Dropping them
+  instead — the first attempt — left TRX 461 units high and CC 911 low.
 - **Prices that resolve to the wrong instrument.** Quoting assets in USD gets
   them all priced, but not all priced correctly: Yahoo's `USDG-USD` quotes about
   $5.45 for a dollar stablecoin, and its `TAO-USD` is plainly not Bittensor. A

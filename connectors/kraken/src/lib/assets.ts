@@ -1,5 +1,9 @@
 /**
- * Pointing this account's assets at Kraken's own prices.
+ * Correcting what Wealthfolio recorded about each Kraken asset.
+ *
+ * Two things it gets wrong on its own, both for the same reason — it resolves a
+ * bare crypto ticker through a market-data provider whose symbol space is not
+ * Kraken's. The price comes from the wrong instrument, and so does the name.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  *  What the addon can and cannot do here
@@ -22,7 +26,7 @@
  * honest, which a lookup against the wrong list would not be.
  */
 import type { AddonContext, Holding } from '@wealthfolio/addon-sdk';
-import { CRYPTO_QUOTE_CURRENCY, QUOTE_PROVIDER } from '../config';
+import { ASSET_NAMES, CRYPTO_QUOTE_CURRENCY, QUOTE_PROVIDER } from '../config';
 
 /** An asset this connector imported, and where its price comes from. */
 export interface PricedAsset {
@@ -73,13 +77,15 @@ export async function readPricing(ctx: AddonContext, accountId: string): Promise
     let onKraken = false;
     try {
       const profile = (await ctx.api.assets.getProfile(assetId)) as {
-        dataSource?: string;
+        providerConfig?: { preferred_provider?: string; custom_provider_code?: string } | null;
         instrumentType?: string;
       };
-      // Only crypto. An equity or an FX pair that happens to sit in this
-      // account is not something Kraken's Ticker can answer for.
+      // Only crypto. An equity, a cash line or an FX pair that happens to sit
+      // in this account is not something Kraken's Ticker can answer for —
+      // pointing one at it asks for `$CASHUSD` or `BTCGBPUSD`, pairs that
+      // cannot exist, and the failures read like a broken provider.
       if (profile.instrumentType !== 'CRYPTO') continue;
-      onKraken = isKrakenSource(profile.dataSource);
+      onKraken = isKrakenSource(profile.providerConfig);
     } catch {
       // An unreadable profile is reported as not-on-Kraken, which at worst
       // offers a change that turns out to be a no-op.
@@ -149,12 +155,21 @@ export async function applyKrakenPricing(
       const profile = await ctx.api.assets.getProfile(asset.assetId);
       // Read-modify-write: the handler takes a whole profile, so anything left
       // out risks being cleared.
+      //
+      // `providerConfig` is the field that does this. `dataSource`,
+      // `providerId` and `providerSymbol` are what the SDK's shape suggests,
+      // and `UpdateAssetProfile` accepts none of them — sending those returned
+      // 200 and changed nothing at all, which is why the panel kept offering a
+      // change it had already "made". A custom provider is named in two parts:
+      // the built-in type it runs under, then its own code.
       const update = {
         ...profile,
         quoteCcy: CRYPTO_QUOTE_CURRENCY,
-        dataSource: QUOTE_PROVIDER.id,
-        providerId: QUOTE_PROVIDER.id,
-        providerSymbol: asset.symbol,
+        providerConfig: {
+          ...(typeof profile.providerConfig === 'object' ? profile.providerConfig : {}),
+          preferred_provider: 'CUSTOM_SCRAPER',
+          custom_provider_code: QUOTE_PROVIDER.id,
+        },
       };
       await ctx.api.assets.updateProfile(update as never);
       assigned += 1;
@@ -217,7 +232,7 @@ async function countKrakenQuotes(
       for (const quote of history) {
         if (!latest || quote.timestamp > latest.timestamp) latest = quote;
       }
-      if (isKrakenSource(latest?.dataSource)) sourced += 1;
+      if (isKrakenQuote(latest?.dataSource)) sourced += 1;
     } catch {
       // A quote history we cannot read counts as no evidence, not as failure.
     }
@@ -241,16 +256,59 @@ async function settle(
 }
 
 /**
- * Whether a stored `dataSource` names this connector's provider.
+ * Correct the names of assets Wealthfolio got from the wrong instrument.
+ *
+ * `asset.name` is honoured when an asset is created and ignored afterwards, so
+ * anything imported before a name was known keeps whatever the market-data
+ * provider matched. Yahoo called Kraken's `CC` "CloudCoin USD" — a different
+ * coin, at roughly twice the price.
+ *
+ * Only names listed in `ASSET_NAMES` are touched. A stored name is never
+ * replaced with the bare symbol: for the majors the provider's name is right
+ * and better than `BTC`, and overwriting one a user set by hand would be worse
+ * than the problem being fixed.
+ */
+export async function reconcileAssetNames(
+  ctx: AddonContext,
+  accountId: string,
+  log: (level: 'info' | 'success' | 'warn' | 'error', message: string) => void,
+): Promise<number> {
+  const { assets } = await readPricing(ctx, accountId);
+  let renamed = 0;
+
+  for (const asset of assets) {
+    const wanted = ASSET_NAMES[asset.symbol];
+    if (!wanted) continue;
+    try {
+      const profile = (await ctx.api.assets.getProfile(asset.assetId)) as { name?: string };
+      if (profile.name === wanted) continue;
+      await ctx.api.assets.updateProfile({ ...profile, name: wanted } as never);
+      log('success', `${asset.symbol}: renamed from "${profile.name}" to "${wanted}".`);
+      renamed += 1;
+    } catch (error) {
+      log('warn', `Could not rename ${asset.symbol}: ${describe(error)}`);
+    }
+  }
+  return renamed;
+}
+
+/** Whether an asset's stored provider config names this connector's provider. */
+function isKrakenSource(
+  config: { preferred_provider?: string; custom_provider_code?: string } | null | undefined,
+): boolean {
+  return config?.custom_provider_code === QUOTE_PROVIDER.id;
+}
+
+/**
+ * Whether a stored quote came from this connector's provider.
  *
  * A custom provider's quotes are namespaced by the provider *type* that ran
  * them: the source recorded against a Kraken quote is
  * `CUSTOM_SCRAPER:kraken-ticker`, not `kraken-ticker`. Comparing for equality
  * matched nothing, so a provider that was working perfectly was reported as
- * missing — and the panel told the user to go and create one that already
- * existed.
+ * missing — and the panel told the user to create one that already existed.
  */
-function isKrakenSource(dataSource: string | undefined): boolean {
+function isKrakenQuote(dataSource: string | undefined): boolean {
   if (!dataSource) return false;
   return dataSource === QUOTE_PROVIDER.id || dataSource.endsWith(`:${QUOTE_PROVIDER.id}`);
 }
