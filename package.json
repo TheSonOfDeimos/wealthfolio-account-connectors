@@ -15,6 +15,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "verify": "pnpm type-check && pnpm -r verify",
     "build": "pnpm -r build",
     "type-check": "tsc --noEmit",

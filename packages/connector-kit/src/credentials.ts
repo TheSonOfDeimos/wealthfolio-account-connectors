@@ -48,3 +48,67 @@ export async function hasCredentials(ctx: AddonContext, secretKey: string): Prom
 export async function clearCredentials(ctx: AddonContext, secretKey: string): Promise<void> {
   await ctx.api.secrets.delete(secretKey);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Key pairs a connector has to read back
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where a provider's key and secret live when the connector must sign for
+ * itself.
+ *
+ * The functions above exist so the addon never sees the credentials: the host
+ * builds the `Authorization` header from a named keyring entry, and the
+ * plaintext stays out of addon memory entirely. That only works for providers
+ * the broker can authenticate — `basic` and `bearer`, and nothing else.
+ *
+ * An exchange that signs each request with an HMAC over a nonce and the body
+ * cannot be served that way, so the connector has to hold the secret long
+ * enough to compute a signature. These functions are that path, kept separate
+ * and named plainly rather than folded into the ones above, because the
+ * difference is a security property and not an implementation detail.
+ *
+ * Two entries rather than one encoded string: nothing here is being handed to
+ * a header, so there is no encoding to agree on, and a secret is easier to
+ * rotate on its own.
+ */
+export interface KeyPairKeys {
+  apiKeyEntry: string;
+  apiSecretEntry: string;
+}
+
+export async function saveKeyPair(
+  ctx: AddonContext,
+  keys: KeyPairKeys,
+  apiKey: string,
+  apiSecret: string,
+): Promise<void> {
+  const key = apiKey.trim();
+  const secret = apiSecret.trim();
+  if (!key || !secret) {
+    throw new Error('Both the API key and the API secret are required.');
+  }
+  await ctx.api.secrets.set(keys.apiKeyEntry, key);
+  await ctx.api.secrets.set(keys.apiSecretEntry, secret);
+}
+
+/** Undefined when either half is missing, so a partial save cannot half-work. */
+export async function readKeyPair(
+  ctx: AddonContext,
+  keys: KeyPairKeys,
+): Promise<{ apiKey: string; apiSecret: string } | undefined> {
+  const [apiKey, apiSecret] = await Promise.all([
+    ctx.api.secrets.get(keys.apiKeyEntry),
+    ctx.api.secrets.get(keys.apiSecretEntry),
+  ]);
+  return apiKey && apiSecret ? { apiKey, apiSecret } : undefined;
+}
+
+export async function hasKeyPair(ctx: AddonContext, keys: KeyPairKeys): Promise<boolean> {
+  return (await readKeyPair(ctx, keys)) !== undefined;
+}
+
+export async function clearKeyPair(ctx: AddonContext, keys: KeyPairKeys): Promise<void> {
+  await ctx.api.secrets.delete(keys.apiKeyEntry);
+  await ctx.api.secrets.delete(keys.apiSecretEntry);
+}

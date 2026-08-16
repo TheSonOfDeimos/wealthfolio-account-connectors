@@ -18,10 +18,19 @@ export interface LinkOptions {
   provider: string;
   /** Addon-storage key holding the linked account id. */
   storageKey: string;
+  /**
+   * Human-readable provider name, for the account's group and the log line.
+   *
+   * Not cosmetic, and the reason this field exists: it was hardcoded to
+   * "Trading 212" when this module was lifted out of the first connector, so
+   * the second one filed its account under the wrong broker's group and
+   * announced itself in the log as `[trading212]`. Defaults to `provider`.
+   */
+  label?: string;
 }
 
 /**
- * Creating and re-finding the Wealthfolio account that mirrors Trading 212.
+ * Creating and re-finding the Wealthfolio account that mirrors the provider.
  *
  * The account is created once and then found again on every later run, because
  * the alternative — a fresh account per sync — is the kind of mistake that is
@@ -96,12 +105,12 @@ export async function findLinkedAccount(
 }
 
 /**
- * Get the Wealthfolio account for this Trading 212 account, creating it if
+ * Get the Wealthfolio account for this provider account, creating it if
  * needed, and remember it for next time.
  *
- * The new account takes Trading 212's own currency rather than Wealthfolio's
+ * The new account takes the provider's own currency rather than Wealthfolio's
  * base currency. That is not cosmetic: the ledger records cash movements in the
- * currency Trading 212 settled them in, and an account denominated in anything
+ * currency the provider settled them in, and an account denominated in anything
  * else would need those amounts converted — exactly what this addon refuses to
  * do silently.
  */
@@ -127,7 +136,7 @@ export async function linkOrCreateAccount(
     isDefault: false,
     isActive: true,
     trackingMode: 'TRANSACTIONS',
-    group: 'Trading 212',
+    group: link.label ?? link.provider,
     provider: link.provider,
     providerAccountId: String(summary.id),
   };
@@ -135,7 +144,9 @@ export async function linkOrCreateAccount(
   const account = await ctx.api.accounts.create(payload);
   await ctx.api.storage.set(link.storageKey, account.id);
   ctx.api.logger.info(
-    `[trading212] Created account ${account.id} (${account.currency}) for Trading 212 ${summary.id}.`,
+    `[${link.provider}] Created account ${account.id} (${account.currency}) for ${
+      link.label ?? link.provider
+    } ${summary.id}.`,
   );
 
   return { account, created: true };

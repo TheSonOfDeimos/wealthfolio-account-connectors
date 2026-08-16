@@ -1,0 +1,41 @@
+{
+  "name": "@wealthfolio-connectors/kraken",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Imports your Kraken history into Wealthfolio \u2014 trades, deposits, withdrawals, staking rewards and fees.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "type-check": "tsc --noEmit",
+    "verify": "pnpm type-check && pnpm build",
+    "clean": "rm -rf dist *.zip",
+    "package": "zip -r kraken-import-$npm_package_version.zip manifest.json dist/ -x '*.map'",
+    "bundle": "pnpm clean && pnpm verify && pnpm package",
+    "dev:deploy": "tsx ../../tools/dev-deploy.ts",
+    "icon:embed": "tsx ../../tools/embed-icon.ts",
+    "smoke:live": "tsx tools/smoke-live.ts",
+    "probe:host": "tsx tools/probe-host.ts",
+    "reconcile": "tsx tools/reconcile-docker.ts"
+  },
+  "dependencies": {
+    "@wealthfolio-connectors/connector-kit": "workspace:*"
+  },
+  "peerDependencies": {
+    "@wealthfolio/addon-sdk": "^3.6.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.13",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "@wealthfolio/addon-sdk": "^3.6.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.2"
+  }
+}

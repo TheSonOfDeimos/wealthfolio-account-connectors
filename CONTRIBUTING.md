@@ -25,10 +25,16 @@ everything else here.
 
 A few practical things:
 
-- **Never commit credentials.** Trading 212 keys go in `.env`, which git
-  ignores. There is a `.env.example` to copy. This project leaked a live key
-  pair into its own history once; the fix was rewriting history and revoking the
-  key. Do not repeat it.
+- **Never commit credentials.** Every provider's keys go in `.env`, which git
+  ignores. `.env.example` is the tracked template listing what each connector
+  needs — copy it, do not fill it in. This project leaked a live key pair into
+  its own history once; the fix was rewriting history and revoking the key.
+
+  A `pre-commit` hook in `.githooks/` now refuses both mistakes: staging `.env`
+  itself, and committing a `.env.example` with values typed into it. `pnpm
+  install` points git at it for you (`core.hooksPath`); if you skipped that,
+  run `git config core.hooksPath .githooks`. Bypass with `--no-verify` only
+  when you have checked what you are bypassing.
 - **Do not infer market data from a ticker string.** `ABML_US_EQ` does not mean
   the symbol is ABML, the market is US, or the type is equity — Trading 212's
   catalogue says that instrument is `ABAT`, because the company renamed and the

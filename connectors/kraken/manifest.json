@@ -1,0 +1,115 @@
+{
+  "id": "kraken-import",
+  "name": "Kraken Import",
+  "version": "0.1.0",
+  "description": "Reads your Kraken history \u2014 purchases, deposits, withdrawals and staking rewards \u2014 and imports it into Wealthfolio.",
+  "author": "Lev Kargalov",
+  "license": "AGPL-3.0-or-later",
+  "main": "dist/addon.js",
+  "sdkVersion": "3.6.2",
+  "minWealthfolioVersion": "3.6.2",
+  "enabled": true,
+  "keywords": [
+    "wealthfolio",
+    "addon",
+    "kraken",
+    "crypto",
+    "import",
+    "exchange"
+  ],
+  "network": {
+    "allowedHosts": [
+      "api.kraken.com"
+    ]
+  },
+  "hostDependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "@wealthfolio/addon-sdk": "^3.6.2"
+  },
+  "contributes": {
+    "routes": [
+      {
+        "id": "kraken-import"
+      }
+    ],
+    "links": {
+      "sidebar": [
+        {
+          "id": "kraken-import",
+          "route": "kraken-import",
+          "label": "Kraken",
+          "icon": "bank",
+          "order": 101
+        }
+      ]
+    }
+  },
+  "permissions": [
+    {
+      "category": "network",
+      "functions": [
+        "request"
+      ],
+      "purpose": "Read your balances and history from api.kraken.com. Only query endpoints are called: the addon never places an order, moves Earn funds, or withdraws."
+    },
+    {
+      "category": "secrets",
+      "functions": [
+        "set",
+        "get",
+        "delete"
+      ],
+      "purpose": "Keep your Kraken API key and private key in the keyring. Unlike a broker the host can authenticate for us, Kraken signs each request with an HMAC over a nonce and the request body, so the addon must read the private key back to compute that signature. 'use' is not requested \u2014 the host cannot build this header itself."
+    },
+    {
+      "category": "accounts",
+      "functions": [
+        "getAll",
+        "create"
+      ],
+      "purpose": "Let you pick which Wealthfolio account the imported history belongs to, or create a new one named by you. Kraken holds balances per asset and has no account currency, so the connector asks which one to use."
+    },
+    {
+      "category": "activities",
+      "functions": [
+        "getAll",
+        "saveMany"
+      ],
+      "purpose": "Write the mapped history once you confirm, and recognise what was already imported so a repeat sync adds only what is new."
+    },
+    {
+      "category": "portfolio",
+      "functions": [
+        "recalculate",
+        "getHoldings"
+      ],
+      "purpose": "Ask Wealthfolio to revalue the portfolio after an import, and read back your holdings to check each Kraken asset resolved to the right symbol."
+    },
+    {
+      "category": "market-data",
+      "functions": [
+        "searchTicker",
+        "syncHistory",
+        "sync",
+        "getProviders"
+      ],
+      "purpose": "Look up ticker symbols while you correct one, fetch prices for the assets an import introduces so a fresh install is not left reporting missing rates, and refresh a specific asset after its price source is changed to Kraken's own Ticker."
+    },
+    {
+      "category": "assets",
+      "functions": [
+        "getProfile",
+        "updateProfile"
+      ],
+      "purpose": "Read the currency Wealthfolio assigned to each imported asset and correct it when it disagrees with the one Kraken states."
+    },
+    {
+      "category": "quotes",
+      "functions": [
+        "getHistory"
+      ],
+      "purpose": "Read the source of each asset's latest quote, so the addon can confirm that a price actually came from Kraken rather than reporting success because a stale price happened to still be there."
+    }
+  ]
+}

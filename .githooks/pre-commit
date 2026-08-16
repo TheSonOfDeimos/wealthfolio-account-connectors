@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# Refuse to commit a credential.
+#
+# Two ways this repository could leak a key, and it has already done one of
+# them once: committing `.env` itself, or typing a real value into the tracked
+# `.env.example` template instead of the ignored `.env`. Both are caught here,
+# because .gitignore cannot help with a file that is already tracked and does
+# nothing at all about the second case.
+#
+# Enable with:  git config core.hooksPath .githooks
+# Bypass, if you are certain:  git commit --no-verify
+
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+fail=0
+
+for file in $staged; do
+  case "$(basename "$file")" in
+    # The template is meant to ship. Everything else named .env* is not.
+    .env.example) ;;
+    .env|.env.*)
+      echo "BLOCKED: $file is a credential file and must not be committed."
+      echo "         Real keys belong in .env, which .gitignore already covers."
+      fail=1
+      continue
+      ;;
+    *) continue ;;
+  esac
+
+  # `.env.example` may only carry empty assignments. A value after the `=`
+  # means someone filled the template in instead of copying it to `.env`.
+  filled=$(git show ":$file" 2>/dev/null \
+    | grep -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[[:space:]]*[^[:space:]#]' \
+    || true)
+
+  if [ -n "$filled" ]; then
+    echo "BLOCKED: $file has values filled in, and it is tracked by git."
+    echo "$filled" | sed 's/^/         /'
+    echo "         Put real credentials in .env instead; leave the template empty."
+    fail=1
+  fi
+done
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "Nothing was committed. If this is a false positive, re-run with --no-verify."
+  exit 1
+fi
+
+exit 0

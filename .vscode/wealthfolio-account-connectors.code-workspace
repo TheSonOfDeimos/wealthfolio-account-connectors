@@ -1,4 +1,4 @@
-{
+  {
   "folders": [
     {
       "path": "..",
@@ -42,13 +42,18 @@
   },
   "tasks": {
     "version": "2.0.0",
+    // Every task is prefixed with what it acts on, because the picker sorts
+    // alphabetically and a second connector made bare labels like "Addon:
+    // smoke test" ambiguous. The groups are: Kraken, Trading 212, Wealthfolio
+    // (the Docker instance). Each connector gets the same three: smoke test,
+    // bundle, deploy.
     "tasks": [
-      // ===== Addon =====
+      // ===== Trading 212 =====
       {
         // clean → type-check → vite build → zip. The type-check is the reason
         // this is one task: vite strips types without checking them, so a
         // build alone can package code that does not compile.
-        "label": "Addon: bundle (zip)",
+        "label": "Trading 212: bundle (zip)",
         "type": "shell",
         "command": "pnpm",
         "args": ["bundle"],
@@ -71,7 +76,7 @@
       {
         // Bundles, then installs into the running Wealthfolio container over
         // its HTTP API. Reload the browser tab afterwards to pick it up.
-        "label": "Addon: deploy to Wealthfolio",
+        "label": "Trading 212: deploy to Wealthfolio",
         "type": "shell",
         "command": "pnpm",
         "args": ["dev:deploy"],
@@ -87,19 +92,19 @@
         }
       },
 
-      // ===== Smoke test (hits the LIVE Trading 212 API, read-only) =====
       {
-        "label": "Addon: smoke test (live)",
+        // Hits the LIVE Trading 212 API. Read-only: every call is a GET.
+        "label": "Trading 212: smoke test (live)",
         "type": "shell",
         "command": "pnpm",
         "args": ["smoke:live"],
         "options": {
           "cwd": "${workspaceFolder}/connectors/trading212"
         },
-        "group": {
-          "kind": "test",
-          "isDefault": true
-        },
+        // In the test group but not the default: with two connectors there is
+        // no sensible default, so "Run Test Task" offers the choice instead of
+        // silently picking one.
+        "group": "test",
         "problemMatcher": [],
         "presentation": {
           "echo": true,
@@ -109,7 +114,71 @@
         }
       },
 
-      // ===== Wealthfolio test instance (Docker) =====
+      // ===== Kraken =====
+      {
+        // Same chain as Trading 212: clean → type-check → vite build → zip.
+        "label": "Kraken: bundle (zip)",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["bundle"],
+        "options": {
+          "cwd": "${workspaceFolder}/connectors/kraken"
+        },
+        "group": "build",
+        "problemMatcher": ["$tsc"],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+
+      {
+        // Bundles, then installs into the running Wealthfolio container.
+        // Reload the browser tab afterwards to pick it up.
+        "label": "Kraken: deploy to Wealthfolio",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["dev:deploy"],
+        "options": {
+          "cwd": "${workspaceFolder}/connectors/kraken"
+        },
+        "problemMatcher": ["$tsc"],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": true
+        }
+      },
+
+      {
+        // Hits the LIVE Kraken API with the read-only key from .env. Nothing
+        // is written; no order is placed and no Earn funds are moved.
+        //
+        // History endpoints cost 4 against a counter of 20 decaying at 0.5/s,
+        // so this spends most of its time waiting on the limiter — it prints
+        // why rather than looking hung. Pass flags from a terminal when you
+        // need them: `pnpm smoke:live -- --full --json=out.json`.
+        "label": "Kraken: smoke test (live)",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["smoke:live"],
+        "options": {
+          "cwd": "${workspaceFolder}/connectors/kraken"
+        },
+        "group": "test",
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": true
+        }
+      },
+
+// ===== Wealthfolio test instance (Docker) =====
       {
         "label": "Wealthfolio: up",
         "type": "shell",
@@ -199,10 +268,28 @@
       {
         // Breakpoints work in tools/ and src/ — tsx emits source maps and
         // Node maps them back to the TypeScript.
-        "name": "Smoke test (debug)",
+        "name": "Trading 212: smoke test (debug)",
         "type": "node",
         "request": "launch",
         "program": "${workspaceFolder}/connectors/trading212/tools/smoke-live.ts",
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "sourceMaps": true,
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
+      {
+        // The cheapest place to debug the Kraken connector: the signing, the
+        // pagination and the rate limiter all run here exactly as they will in
+        // the addon, with no build and no Wealthfolio involved.
+        //
+        // `cwd` is the repo root, but nothing depends on it — credentials are
+        // resolved relative to tools/credentials.ts, not the working directory.
+        "name": "Kraken: smoke test (debug)",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder}/connectors/kraken/tools/smoke-live.ts",
+        "args": ["--max-items=100"],
         "runtimeArgs": ["--import", "tsx"],
         "cwd": "${workspaceFolder}",
         "console": "integratedTerminal",

@@ -6,7 +6,10 @@
  * knows what a Trading 212 order looks like does not.
  */
 export { createBrokeredFetch } from './brokered-fetch';
+export type { BrokeredAuth } from './brokered-fetch';
 export { toBasicSecret, saveCredentials, hasCredentials, clearCredentials } from './credentials';
+export { saveKeyPair, readKeyPair, hasKeyPair, clearKeyPair } from './credentials';
+export type { KeyPairKeys } from './credentials';
 export { findLinkedAccount, linkOrCreateAccount, describeMismatch } from './account';
 export type { BrokerAccount, LinkOptions, LinkResult } from './account';
 export { reconcileAssetCurrencies } from './asset-currency';

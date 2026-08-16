@@ -105,4 +105,5 @@ export const HISTORY_PAGE_LIMIT = 50;
 export const T212_LINK = {
   provider: T212_PROVIDER,
   storageKey: LINKED_ACCOUNT_STORAGE_KEY,
+  label: 'Trading 212',
 } as const;

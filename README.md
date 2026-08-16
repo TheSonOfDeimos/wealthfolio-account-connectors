@@ -35,6 +35,7 @@ prompts you to check the rest.
 | Provider | Type | Status | Imports |
 | --- | --- | --- | --- |
 | [Trading 212](connectors/trading212) | Broker | **Working** | Trades, dividends, deposits, withdrawals, interest, fees and taxes |
+| [Kraken](connectors/kraken) | Crypto exchange | **Extraction only** | Reads purchases, deposits, withdrawals, staking rewards and Earn positions; mapper not written yet |
 
 Adding one? See [Writing a connector](#writing-a-connector).
 

@@ -48,18 +48,48 @@ function fromDotEnv(): Record<string, string> {
  * credentials fails later with a 401 that says nothing about the cause.
  */
 export function requireCredentials(): { apiKey: string; apiSecret: string } {
+  return readPair('T212', 'Trading 212', 'Generate the pair in the Trading 212 app under Settings → API.');
+}
+
+/**
+ * The Kraken pair, for `pnpm smoke:live` in `connectors/kraken`.
+ *
+ * `KRAKEN_API_SECRET` is Kraken's "Private key" — base64, stored exactly as it
+ * is displayed. It is decoded at signing time, so nothing has to keep a second
+ * form of it.
+ */
+export function requireKrakenCredentials(): { apiKey: string; apiSecret: string } {
+  return readPair(
+    'KRAKEN',
+    'Kraken',
+    'Kraken Pro → Settings → API → Add API key. Tick exactly three permissions:\n' +
+      '  Funds · Query, Orders · Query closed orders & trades, Data · Query ledger entries.\n' +
+      'Everything else is a write path that adds no read access.',
+  );
+}
+
+/**
+ * Shared lookup. Exits rather than returning empty strings: a script that
+ * carries on with no credentials fails later with an auth error that says
+ * nothing about the cause.
+ */
+function readPair(
+  prefix: string,
+  provider: string,
+  guidance: string,
+): { apiKey: string; apiSecret: string } {
   const dotEnv = fromDotEnv();
-  const apiKey = process.env.T212_API_KEY ?? dotEnv.T212_API_KEY ?? '';
-  const apiSecret = process.env.T212_API_SECRET ?? dotEnv.T212_API_SECRET ?? '';
+  const apiKey = process.env[`${prefix}_API_KEY`] ?? dotEnv[`${prefix}_API_KEY`] ?? '';
+  const apiSecret = process.env[`${prefix}_API_SECRET`] ?? dotEnv[`${prefix}_API_SECRET`] ?? '';
 
   if (!apiKey || !apiSecret) {
     console.error(
-      'Missing Trading 212 credentials.\n\n' +
+      `Missing ${provider} credentials.\n\n` +
         'Create a .env file in the project root (git ignores it) with:\n' +
-        '  T212_API_KEY=your-key\n' +
-        '  T212_API_SECRET=your-secret\n\n' +
-        'Generate the pair in the Trading 212 app under Settings → API.\n' +
-        'The addon itself does not use these; it asks for the key pair in its own form.',
+        `  ${prefix}_API_KEY=your-key\n` +
+        `  ${prefix}_API_SECRET=your-secret\n\n` +
+        `${guidance}\n` +
+        'The addon itself does not use these; it asks for the pair in its own form.',
     );
     process.exit(1);
   }
