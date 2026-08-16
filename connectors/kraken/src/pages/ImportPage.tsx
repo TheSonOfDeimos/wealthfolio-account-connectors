@@ -19,7 +19,7 @@ import { applyKrakenPricing, readPricing } from '../lib/assets';
 import type { ApplyResult } from '../lib/assets';
 import { createSource, KRAKEN_KEYS } from '../lib/source';
 import { displaySymbol, fetchAssets } from '../lib/extract';
-import { resetEverything, runSync } from '../lib/pipeline';
+import { readImportedKeys, resetEverything, runSync } from '../lib/pipeline';
 import type { LogEntry, LogLevel, Progress, SyncMode, SyncResult } from '../lib/pipeline';
 import type { KrakenBalances } from '../lib/types';
 import { BROKER_ICON } from '../lib/broker-icon';
@@ -92,6 +92,19 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
           const existing = await findLinkedAccount(ctx, KRAKEN_LINK, { id: 'spot' });
           if (existing) {
             setAccount(existing.account);
+
+            // An account this connector created but never imported into is not
+            // finished, and sending it to the control panel skips both the
+            // price setup and the import — which is exactly what happened to an
+            // account created just before a container was rebuilt.
+            const imported = await readImportedKeys(ctx, existing.account.id);
+            if (imported.size === 0) {
+              const pending = await ctx.api.storage.get(PROVIDER_STEP_STORAGE_KEY);
+              setStep(pending ? 'confirm' : 'prices');
+              setRestoring(false);
+              return;
+            }
+
             setStep('ready');
             // Checked on load, not only after a sync: an account imported in an
             // earlier session is the likeliest one sitting on prices Yahoo got
@@ -535,6 +548,89 @@ function BrokerMark() {
  * choosing Yahoo knowing what that costs. The claim is then checked for real
  * after the first import.
  */
+/**
+ * How to add the provider, in the order Wealthfolio's own form asks for it.
+ *
+ * Shared by the onboarding step and the Prices panel: someone who set the
+ * connector up before this step existed never sees step 3, and would otherwise
+ * be told the provider is missing with no way to find out what to type.
+ */
+function ProviderGuide() {
+  const [latest, historical] = QUOTE_PROVIDER.sources;
+  return (
+    <Steps2>
+      <Step2 n={1} title="Open the form">
+        In a second tab, go to <strong>Settings → Market Data</strong>, choose the{' '}
+        <strong>Custom Providers</strong> tab, and click <strong>Add Provider</strong>.
+      </Step2>
+
+      <Step2 n={2} title="Provider mode → Both">
+        Three modes are offered. Pick <strong>Both</strong> (“series + override”) — it is the only
+        one with a historical endpoint, and without history every chart stays empty and every
+        return is computed from a single point.
+      </Step2>
+
+      <Step2 n={3} title="Source type → JSON API">
+        Kraken returns JSON, so choose <strong>JSON API</strong> (“REST returning JSON”), not Web
+        Page, HTML Table or CSV.
+      </Step2>
+
+      <Step2 n={4} title="Provider identity">
+        <dl className="space-y-2 mt-2">
+          <CopyField label="Name" value={QUOTE_PROVIDER.name} />
+          <CopyField label="Code" value={QUOTE_PROVIDER.id} />
+        </dl>
+        <p className="text-xs text-muted-foreground mt-2">
+          The code must match exactly — it is what this addon looks for when it checks whether
+          the provider is in place.
+        </p>
+      </Step2>
+
+      <Step2 n={5} title="Configure Latest endpoint">
+        Paste the <strong>URL template</strong>, then under{' '}
+        <strong>Field mapping (latest)</strong> set <strong>Price</strong>.
+        <dl className="space-y-2 mt-2">
+          <CopyField label="URL" value={latest?.url ?? ''} />
+          <CopyField label="Price" value={latest?.pricePath ?? ''} />
+        </dl>
+      </Step2>
+
+      <Step2 n={6} title="Configure Historical endpoint">
+        Same again for the historical URL, then map six fields under{' '}
+        <strong>Field mapping (historical)</strong>.
+        <dl className="space-y-2 mt-2">
+          <CopyField label="URL" value={historical?.url ?? ''} />
+          <CopyField label="Price" value={historical?.pricePath ?? ''} />
+          {historical?.datePath ? <CopyField label="Date" value={historical.datePath} /> : null}
+          {historical?.openPath ? <CopyField label="Open" value={historical.openPath} /> : null}
+          {historical?.highPath ? <CopyField label="High" value={historical.highPath} /> : null}
+          {historical?.lowPath ? <CopyField label="Low" value={historical.lowPath} /> : null}
+          {historical?.volumePath ? (
+            <CopyField label="Volume" value={historical.volumePath} />
+          ) : null}
+        </dl>
+        <p className="text-xs text-muted-foreground mt-2">
+          Kraken returns each candle as{' '}
+          <code>[time, open, high, low, close, vwap, volume, count]</code>, which is why the paths
+          index by position and Price is <code>[4]</code>.
+        </p>
+      </Step2>
+
+      <Step2 n={7} title="Create provider">
+        The form's checklist should show <strong>Provider name</strong>,{' '}
+        <strong>URL template</strong> and <strong>Required fields mapped</strong> all satisfied.
+        If it offers a live preview, test with symbol <code>SOL</code> — a price should come back.
+        Then click <strong>Create provider</strong>.
+      </Step2>
+
+      <Step2 n={8} title="Come back here">
+        Continue below. Straight after the import this addon checks whether the prices really
+        came from Kraken, and the Prices panel will say either way.
+      </Step2>
+      </Steps2>
+  );
+}
+
 function ProviderSetup({
   busy,
   onChoose,
@@ -553,52 +649,25 @@ function ProviderSetup({
       </p>
       <p className="text-sm text-muted-foreground">
         Kraken prices every coin it sells, needs no API key, and is the venue your holdings sit on.
-        Adding it now means the import prices correctly from the start; adding it later needs a
-        full rebuild of the valuation history before any chart is right.
+        Do this <strong>before</strong> importing: assets created while the provider exists price
+        correctly from the start, whereas adding it later needs every daily valuation rebuilt
+        before a chart is right.
       </p>
 
-      <p className="text-sm">
-        In a second tab: <strong>Settings → Market Data → Custom Providers → Add Provider</strong>,
-        then fill in the provider and <strong>both</strong> sources.
-      </p>
-      <dl className="space-y-2">
-        <CopyField label="Code" value={QUOTE_PROVIDER.id} />
-        <CopyField label="Name" value={QUOTE_PROVIDER.name} />
-      </dl>
-
-      {QUOTE_PROVIDER.sources.map((source) => (
-        <div key={source.kind} className="border-t pt-3 space-y-2">
-          <p className="text-xs font-medium">
-            Source: <strong>{source.kind === 'latest' ? 'Latest price' : 'Historical'}</strong>{' '}
-            <span className="font-normal text-muted-foreground">
-              ({source.format.toUpperCase()})
-              {source.kind === 'historical' ? ' — without this one every chart stays empty' : null}
-            </span>
-          </p>
-          <dl className="space-y-2">
-            <CopyField label="URL" value={source.url} />
-            <CopyField label="Price" value={source.pricePath} />
-            {source.datePath ? <CopyField label="Date" value={source.datePath} /> : null}
-            {source.openPath ? <CopyField label="Open" value={source.openPath} /> : null}
-            {source.highPath ? <CopyField label="High" value={source.highPath} /> : null}
-            {source.lowPath ? <CopyField label="Low" value={source.lowPath} /> : null}
-            {source.volumePath ? <CopyField label="Volume" value={source.volumePath} /> : null}
-          </dl>
-        </div>
-      ))}
-
-      <p className="text-xs text-muted-foreground">
-        Keep every <code>*</code> exactly as shown — Kraken re-keys some pairs, so a request for{' '}
-        <code>XBTUSD</code> comes back under <code>XXBTZUSD</code>, and an exact key would fail on
-        Bitcoin and Ether. The <code>USD</code> in each URL is literal; <code>{'{CURRENCY}'}</code>{' '}
-        would expand to the asset's own currency and ask for pairs that do not exist.
-      </p>
+      <ProviderGuide />
 
       <Note tone="warn">
-        This addon cannot check whether you have added it — Wealthfolio only tells addons which
-        provider <em>types</em> exist, not which custom ones are configured. It is verified for
-        real straight after the import, and the Prices panel will say so either way.
+        Keep every <code>*</code> exactly as shown. Kraken re-keys some pairs — a request for{' '}
+        <code>XBTUSD</code> comes back under <code>XXBTZUSD</code> — so an exact key would work for
+        most coins and silently fail on Bitcoin and Ether. The <code>USD</code> in each URL is
+        literal too: <code>{'{CURRENCY}'}</code> expands to the asset's own currency and asks for
+        pairs that do not exist.
       </Note>
+
+      <p className="text-sm text-muted-foreground">
+        This addon cannot check whether you have added it — Wealthfolio tells addons which provider{' '}
+        <em>types</em> exist, never which custom ones are configured.
+      </p>
 
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => onChoose('added')} disabled={busy} primary>
@@ -609,7 +678,7 @@ function ProviderSetup({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Choosing Yahoo imports every holding and transaction correctly — only the prices suffer, and
+        Yahoo still imports every holding and transaction correctly — only the prices suffer, and
         you can add the provider later from the Prices panel.
       </p>
     </Panel>
@@ -617,18 +686,11 @@ function ProviderSetup({
 }
 
 /**
- * Getting Kraken's own prices onto Kraken's own holdings.
+ * Whether Kraken prices actually took effect, after the import.
  *
- * Wealthfolio prices crypto through Yahoo, which is the wrong source here twice
- * over: it has no entry at all for several Kraken coins, and for others it
- * resolves a different instrument and returns a confident wrong number. The
- * second is the worse failure, because nothing about it looks broken.
- *
- * The addon can point an asset at a provider but cannot create one — there is
- * no custom-provider API in the SDK — so when the provider turns out to be
- * missing this shows the exact values to fill in. Field by field, with a copy
- * button each: Wealthfolio's Add Provider dialog is a form, not a JSON paste,
- * so a single blob would be no use.
+ * This is the step the setup guide could not be: with assets in place, the
+ * provider can be assigned and a quote's `dataSource` read back, so the answer
+ * here is observed rather than asserted.
  */
 function Prices({
   offKraken,
@@ -650,23 +712,15 @@ function Prices({
       {!pricing ? (
         <>
           <p className="text-sm text-muted-foreground">
-            {offKraken.length} holding{offKraken.length === 1 ? '' : 's'} take their price from
-            Yahoo, which is the wrong source for coins held on Kraken.
+            {offKraken.length} holding{offKraken.length === 1 ? '' : 's'} still take their price
+            from Yahoo
             {unpriced.length > 0 ? (
               <>
-                {' '}
-                It has no entry at all for {unpriced.length} of them —{' '}
-                <span className="font-mono text-xs">{unpriced.join(' ')}</span> —
+                , and {unpriced.length} have no price at all —{' '}
+                <span className="font-mono text-xs">{unpriced.join(' ')}</span>
               </>
-            ) : (
-              ' It has no entry at all for some Kraken coins'
-            )}{' '}
-            and for others it resolves a different instrument and returns a confidently wrong
-            number. A wrong price is the worse of the two, because nothing looks broken.
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Kraken prices every coin it sells, needs no API key, and is the venue these holdings
-            actually sit on.
+            ) : null}
+            .
           </p>
           <Button onClick={onApply} disabled={busy} primary>
             {busy ? 'Applying…' : 'Use Kraken prices'}
@@ -677,47 +731,10 @@ function Prices({
       {pricing?.providerMissing ? (
         <>
           <Note tone="warn">
-            Wealthfolio has no <strong>{QUOTE_PROVIDER.name}</strong> provider yet, and an addon is
-            not allowed to create one. Add it once by hand — it takes about a minute — then press
-            the button again.
+            No <strong>{QUOTE_PROVIDER.name}</strong> provider is configured — every asset was
+            pointed at it and no quote came back. Add it, then press the button again.
           </Note>
-          <p className="text-sm">
-            Go to <strong>Settings → Market Data → Custom Providers → Add Provider</strong>, fill
-            in the provider, then add <strong>both</strong> sources.
-          </p>
-          <dl className="space-y-2">
-            <CopyField label="Code" value={QUOTE_PROVIDER.id} />
-            <CopyField label="Name" value={QUOTE_PROVIDER.name} />
-          </dl>
-
-          {QUOTE_PROVIDER.sources.map((source) => (
-            <div key={source.kind} className="border-t pt-3 space-y-2">
-              <p className="text-xs font-medium">
-                Source: <strong>{source.kind === 'latest' ? 'Latest price' : 'Historical'}</strong>{' '}
-                <span className="font-normal text-muted-foreground">
-                  ({source.format.toUpperCase()})
-                  {source.kind === 'historical'
-                    ? ' — without this one every chart stays empty'
-                    : null}
-                </span>
-              </p>
-              <dl className="space-y-2">
-                <CopyField label="URL" value={source.url} />
-                <CopyField label="Price" value={source.pricePath} />
-                {source.datePath ? <CopyField label="Date" value={source.datePath} /> : null}
-                {source.openPath ? <CopyField label="Open" value={source.openPath} /> : null}
-                {source.highPath ? <CopyField label="High" value={source.highPath} /> : null}
-                {source.lowPath ? <CopyField label="Low" value={source.lowPath} /> : null}
-                {source.volumePath ? <CopyField label="Volume" value={source.volumePath} /> : null}
-              </dl>
-            </div>
-          ))}
-
-          <p className="text-xs text-muted-foreground">
-            Keep every <code>*</code> exactly as shown. Kraken re-keys some pairs in its response —
-            a request for <code>XBTUSD</code> comes back under <code>XXBTZUSD</code> — so an exact
-            key would work for most coins and silently fail on Bitcoin and Ether.
-          </p>
+          <ProviderGuide />
           <Button onClick={onApply} disabled={busy} primary>
             {busy ? 'Checking…' : "I've added it — try again"}
           </Button>
@@ -739,33 +756,66 @@ function Prices({
   );
 }
 
+/** A numbered walkthrough, so the order of the wizard is the order on screen. */
+function Steps2({ children }: { children: React.ReactNode }) {
+  return <ol className="space-y-4 border-t pt-4">{children}</ol>;
+}
+
+function Step2({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <li className="grid grid-cols-[1.75rem_1fr] gap-x-3">
+      <span className="flex h-7 w-7 items-center justify-center rounded-full border text-xs font-medium tabular-nums">
+        {n}
+      </span>
+      <div>
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <div className="text-sm text-muted-foreground mt-1 leading-relaxed">{children}</div>
+      </div>
+    </li>
+  );
+}
+
 /**
  * One value to copy into Wealthfolio's provider form.
  *
- * The value stays in a read-only input rather than plain text so it can be
- * selected by hand when the clipboard is unavailable — the addon runs in a
- * sandboxed iframe, where `navigator.clipboard` is not guaranteed.
+ * The clipboard is not reliably available here. The addon runs in an
+ * `sandbox="allow-scripts"` iframe with no `allow` attribute, so the Clipboard
+ * API is refused by permissions policy — `navigator.clipboard.writeText`
+ * rejects. `document.execCommand('copy')` is the legacy path and is not gated
+ * the same way, so it is tried second, and the value stays in a read-only input
+ * that selects itself so a keyboard copy always works.
+ *
+ * The button reports which of those happened. An earlier version said "Copied"
+ * unconditionally and nothing had reached the clipboard at all.
  */
 function CopyField({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<'idle' | 'copied' | 'selected'>('idle');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const copy = async () => {
     const input = inputRef.current;
+    input?.focus();
     input?.select();
+
+    let copied = false;
     try {
       await navigator.clipboard.writeText(value);
+      copied = true;
     } catch {
-      // Falls back to the selection the click just made, which the user can
-      // copy with the keyboard.
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      }
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+
+    setState(copied ? 'copied' : 'selected');
+    setTimeout(() => setState('idle'), 2500);
   };
 
   return (
     <div className="flex items-center gap-2">
-      <dt className="text-xs text-muted-foreground w-20 shrink-0">{label}</dt>
+      <dt className="text-xs text-muted-foreground w-16 shrink-0">{label}</dt>
       <dd className="flex-1 flex items-center gap-2 min-w-0">
         <input
           ref={inputRef}
@@ -774,7 +824,9 @@ function CopyField({ label, value }: { label: string; value: string }) {
           onFocus={(event) => event.target.select()}
           className="flex-1 min-w-0 border rounded px-2 py-1 font-mono text-xs bg-muted/30"
         />
-        <Button onClick={copy}>{copied ? 'Copied' : 'Copy'}</Button>
+        <Button onClick={copy}>
+          {state === 'copied' ? 'Copied' : state === 'selected' ? 'Press ⌘C' : 'Copy'}
+        </Button>
       </dd>
     </div>
   );
