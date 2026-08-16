@@ -2,6 +2,7 @@ import type { Account, AddonContext, SymbolSearchResult } from '@wealthfolio/add
 import type { AccountSummary } from 't212-sdk';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { REVIEW_STORAGE_KEY } from '../config';
+import { BROKER_ICON } from '../lib/broker-icon';
 import { describeMismatch, findLinkedAccount, linkOrCreateAccount } from '../lib/account';
 import { clearCredentials, hasCredentials, saveCredentials } from '../lib/credentials';
 import { resetEverything, runSync, source } from '../lib/pipeline';
@@ -221,28 +222,27 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
     });
 
 /**
- * A "212" badge for the page heading.
- *
- * Not Trading 212's own logo: their mark is their trademark and their asset to
- * distribute, and a copy drawn from memory would be a worse likeness than an
- * honest reference. This says which broker the page is about without claiming
- * to be published by them.
+ * Trading 212's mark, beside the page heading.
  *
  * It lives here rather than in the sidebar because the sidebar is host chrome —
  * Wealthfolio draws that icon itself from a fixed set of Phosphor icons, and an
  * addon cannot ship one across the sandbox boundary. Inside its own page it can
  * draw what it likes.
+ *
+ * The artwork is Trading 212's, used to identify the broker this addon talks
+ * to; see `broker-icon.ts` for where it came from. Its corners are transparent,
+ * so the black tile reads on the light theme and drops away to leave the mark
+ * floating on the dark one.
  */
 function BrokerMark() {
   return (
-    <svg viewBox="0 0 64 64" role="img" aria-label="Trading 212" className="h-9 w-9 shrink-0">
-      <rect width="64" height="64" rx="14" fill="#0B3A55" />
-      <g fill="#FFFFFF">
-        <path d="M8 26.5a7.5 7.5 0 0 1 15 0c0 3.2-1.8 5.4-4 7.2L11.5 41H23v5H8v-4.6l9.6-7.6c1.4-1.1 2-2 2-3.3a3 3 0 0 0-6 0z" />
-        <path d="M27 24.5 33.2 18h4.3v28h-5.3V25.2l-2.6 2.2z" />
-        <path d="M41 26.5a7.5 7.5 0 0 1 15 0c0 3.2-1.8 5.4-4 7.2L44.5 41H56v5H41v-4.6l9.6-7.6c1.4-1.1 2-2 2-3.3a3 3 0 0 0-6 0z" />
-      </g>
-    </svg>
+    <img
+      src={BROKER_ICON}
+      alt="Trading 212"
+      width={36}
+      height={36}
+      className="h-9 w-9 shrink-0 rounded-lg"
+    />
   );
 }
 
