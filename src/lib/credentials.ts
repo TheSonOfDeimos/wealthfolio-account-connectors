@@ -1,5 +1,19 @@
+/**
+ * The API key and secret, and where they live.
+ *
+ * Only ever written from what you type into the addon's own form, and only ever
+ * into Wealthfolio's keyring. Nothing here reads them back: the host attaches
+ * them to each Trading 212 request itself, so the addon never holds them in
+ * memory after the moment they are saved.
+ *
+ * `DEV_CREDENTIALS` in `config.ts` is deliberately not consulted. Seeding the
+ * keyring from it meant the credentials form never appeared, and it compiled a
+ * real key pair into `dist/addon.js` in plaintext. Those constants are for the
+ * Node scripts — `pnpm smoke:live`, `pnpm symbols:generate` — which run outside
+ * the sandbox and have no keyring to read.
+ */
 import type { AddonContext } from '@wealthfolio/addon-sdk';
-import { CREDENTIALS_SECRET_KEY, DEV_CREDENTIALS } from '../config';
+import { CREDENTIALS_SECRET_KEY } from '../config';
 
 /**
  * Base64 of `API_KEY:API_SECRET` — the exact string Wealthfolio's keyring must
@@ -33,23 +47,4 @@ export async function hasCredentials(ctx: AddonContext): Promise<boolean> {
 
 export async function clearCredentials(ctx: AddonContext): Promise<void> {
   await ctx.api.secrets.delete(CREDENTIALS_SECRET_KEY);
-}
-
-/**
- * Move credentials hardcoded in `config.ts` into the keyring on first run.
- *
- * Convenience for local development: fill in `DEV_CREDENTIALS`, start the
- * addon, and it is configured. Existing keyring values win, so this never
- * overwrites credentials you entered through the UI.
- */
-export async function seedDevCredentials(ctx: AddonContext): Promise<boolean> {
-  const { apiKey, apiSecret } = DEV_CREDENTIALS;
-  if (!apiKey || !apiSecret) return false;
-  if (await hasCredentials(ctx)) return false;
-
-  await saveCredentials(ctx, apiKey, apiSecret);
-  ctx.api.logger.info(
-    '[trading212] Seeded API credentials from config.ts into the keyring. Clear DEV_CREDENTIALS before sharing this addon.',
-  );
-  return true;
 }

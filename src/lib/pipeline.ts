@@ -2,6 +2,7 @@ import type { ActivityCreate, AddonContext } from '@wealthfolio/addon-sdk';
 import { HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
 import { reconcileAssetCurrencies } from './asset-currency';
 import { createBrokeredFetch } from './brokered-fetch';
+import { clearCredentials } from './credentials';
 import { buildAssetIndex, createRawGet, extractAll } from './extract';
 import type { T212Dataset, T212Source } from './extract';
 import { activityKeyOf, mapDataset } from './mapper';
@@ -384,6 +385,16 @@ export async function resetEverything(
       // A key that was never written is not an error.
     }
   }
+  // Credentials go last, so a failure earlier leaves the addon still able to
+  // reach Trading 212 rather than half-reset and locked out.
+  progress({ phase: 'Resetting', message: 'Clearing the saved API credentials…' });
+  try {
+    await clearCredentials(ctx);
+    log('info', 'API key and secret removed from the keyring.');
+  } catch (error) {
+    log('warn', `Could not clear the saved credentials: ${describeError(error)}`);
+  }
+
   log('success', 'Addon reset. The account remains — delete it in Wealthfolio if you want it gone.');
 
   return { deleted };

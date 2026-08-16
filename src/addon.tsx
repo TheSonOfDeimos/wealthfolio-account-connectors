@@ -1,5 +1,4 @@
 import type { AddonContext, AddonEnableFunction } from '@wealthfolio/addon-sdk';
-import { seedDevCredentials } from './lib/credentials';
 import { ImportPage } from './pages/ImportPage';
 
 /**
@@ -24,15 +23,6 @@ const enable: AddonEnableFunction = (ctx) => {
     id: 'trading212-import',
     path: '/addons/trading212-import',
     component: Trading212Route,
-  });
-
-  // Fire-and-forget: only does anything if DEV_CREDENTIALS are filled in.
-  seedDevCredentials(ctx).catch((error: unknown) => {
-    ctx.api.logger.error(
-      `[trading212] Could not seed dev credentials: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
   });
 
   ctx.api.logger.info('[trading212] Addon enabled');

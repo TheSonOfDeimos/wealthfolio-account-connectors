@@ -1,24 +1,23 @@
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- *  YOUR TRADING 212 CREDENTIALS GO HERE
+ *  CREDENTIALS FOR THE NODE SCRIPTS
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Generate a key pair in the Trading 212 mobile app (Settings → API):
  * https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key
  *
- * This is the single place credentials live for development. Fill it in and:
- *   • the addon moves them into the OS keyring on first start, then uses the
- *     keyring from there on;
- *   • `pnpm smoke:live` reads them directly to call the real API from Node.
+ * **The addon does not read this.** It asks for the key pair in its own form and
+ * keeps it in Wealthfolio's keyring, where it survives restarts and reinstalls
+ * and is cleared only by *Reset everything*. Seeding the keyring from here used
+ * to mean the credentials form never appeared at all, and it compiled a real key
+ * pair into `dist/addon.js` in plaintext for anyone who unzipped it.
  *
- * Leave it empty and the addon asks for the pair in its settings form instead
- * — the right way round for anything you intend to share.
+ * What is left below is for the scripts that run under Node, outside the
+ * sandbox, where there is no keyring to read: `pnpm smoke:live` and
+ * `pnpm symbols:generate`. Leave it empty unless you are running those.
  *
- * Two things to know before pasting real keys:
- *   1. Whatever is here is compiled into `dist/addon.js` in plaintext. Fine on
- *      your own machine, not fine in a bundle you hand out.
- *   2. This file IS tracked by git. Keep local edits out of your diffs with:
- *      git update-index --skip-worktree src/config.ts
+ * This file IS tracked by git. Keep local edits out of your diffs with:
+ *   git update-index --skip-worktree src/config.ts
  */
 export const DEV_CREDENTIALS = {
   apiKey: 'REDACTED-API-KEY',

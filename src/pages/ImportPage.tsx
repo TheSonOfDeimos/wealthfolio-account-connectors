@@ -188,9 +188,13 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
         log: append,
         progress: setProgress,
       });
+      // Back to a blank install: the credentials are gone too, so the only
+      // thing left to show is the form that asks for them again.
       setResult(null);
       setAccount(null);
-      setStep(summary ? 'name' : 'connect');
+      setSummary(null);
+      setConfigured(false);
+      setStep('connect');
       ctx.api.query.invalidateQueries('activities');
       ctx.api.toast.success(
         `Reset done — ${outcome.deleted} activities removed. The account itself is left for you to delete.`,
@@ -461,7 +465,7 @@ function BrokerMark() {
           <div className="border-t pt-4">
             <Action
               title="Reset the addon"
-              description="Removes the imported activities, your ticker corrections and the link to this account, putting the addon back to how it was on install — ready to set up again or uninstall. The account itself stays; Wealthfolio does not let an addon delete one."
+              description="Removes the imported activities, your ticker corrections, the link to this account and your saved API credentials, putting the addon back to how it was on install — ready to set up again or uninstall. The account itself stays; Wealthfolio does not let an addon delete one."
               button="Reset everything"
               onClick={() => setConfirmReset(true)}
               disabled={busy}
@@ -485,11 +489,8 @@ function BrokerMark() {
           <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
             <li>
               <strong>Removed:</strong> every activity this addon imported, your saved ticker
-              corrections, and the link between the addon and this account.
-            </li>
-            <li>
-              <strong>Kept:</strong> your Trading 212 credentials — use <em>Forget</em> above to
-              clear those too.
+              corrections, the link between the addon and this account, and your Trading 212 API
+              key and secret. You will be asked for the key pair again to set the addon up.
             </li>
             <li>
               <strong>The account stays.</strong> Wealthfolio does not let an addon delete an
