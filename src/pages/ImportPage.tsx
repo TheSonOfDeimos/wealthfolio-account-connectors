@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { REVIEW_STORAGE_KEY } from '../config';
 import { BROKER_ICON } from '../lib/broker-icon';
 import { describeMismatch, findLinkedAccount, linkOrCreateAccount } from '../lib/account';
-import { clearCredentials, hasCredentials, saveCredentials } from '../lib/credentials';
+import { hasCredentials, saveCredentials } from '../lib/credentials';
 import { resetEverything, runSync, source } from '../lib/pipeline';
 import { loadOverrides, saveOverrides } from '../lib/symbols';
 import type { SymbolReview } from '../lib/symbols';
@@ -150,15 +150,6 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
       } else {
         setStep('name');
       }
-    });
-
-  const onForget = () =>
-    run(async () => {
-      await clearCredentials(ctx);
-      setConfigured(false);
-      setSummary(null);
-      setAccount(null);
-      setStep('connect');
     });
 
   // ── Step 2 ────────────────────────────────────────────────────────────────
@@ -329,14 +320,11 @@ function BrokerMark() {
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm text-muted-foreground">
                 Credentials are in the OS keyring. Wealthfolio attaches them to each request; the
-                addon never reads them back.
+                addon never reads them back. To remove them, use <em>Reset everything</em>.
               </p>
               <div className="flex gap-2 shrink-0">
                 <Button onClick={onConnect} disabled={busy} primary>
                   {summary ? 'Reconnect' : 'Connect Trading 212'}
-                </Button>
-                <Button onClick={onForget} disabled={busy}>
-                  Forget
                 </Button>
               </div>
             </div>
