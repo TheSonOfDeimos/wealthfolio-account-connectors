@@ -4,6 +4,7 @@
 import your account data in the currency your provider recorded it in.**
 
 [![CI](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/actions/workflows/ci.yml/badge.svg)](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/TheSonOfDeimos/wealthfolio-account-connectors?sort=semver&label=release&color=6c8f4a)](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/releases/latest)
 [![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL%20v3-blue.svg)](LICENSE)
 [![Wealthfolio](https://img.shields.io/badge/wealthfolio-%E2%89%A5%203.6.2-6c8f4a.svg)](https://wealthfolio.app)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2020-5a5a5a.svg)](https://nodejs.org)
@@ -41,8 +42,9 @@ Adding one? See [Writing a connector](#writing-a-connector).
 
 You need Wealthfolio 3.6.2 or newer.
 
-1. Download the connector's `.zip` from the latest [CI run][ci] (the
-   `trading212-addon` artifact), or build it yourself:
+1. Download the connector's `.zip` from the
+   [latest release](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/releases/latest),
+   or build it yourself:
 
    ```bash
    pnpm install
