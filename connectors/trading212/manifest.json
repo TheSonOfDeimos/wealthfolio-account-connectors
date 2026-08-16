@@ -20,6 +20,9 @@
   "network": {
     "allowedHosts": [
       "live.trading212.com"
+    ],
+    "approvedHosts": [
+      "live.trading212.com"
     ]
   },
   "hostDependencies": {

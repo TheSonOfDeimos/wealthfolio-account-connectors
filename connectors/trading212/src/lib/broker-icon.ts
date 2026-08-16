@@ -1,19 +1,20 @@
 /**
  * Trading 212's app icon, inlined.
  *
- * Fetched from `https://www.trading212.com/apple-touch-icon.png` — the icon the
- * site serves for a home-screen shortcut, which is the same mark as the phone
- * app. Taken from Trading 212 directly rather than a re-upload, so it is the
- * current artwork at full resolution and not somebody's rescaled copy.
+ * Fetched from `https://www.trading212.com/apple-touch-icon.png` — the icon the site serves for a home-screen
+ * shortcut, which is the same mark as the phone app. Taken from Trading 212
+ * directly rather than a re-upload, so it is the current artwork at full
+ * resolution and not somebody's rescaled copy.
  *
- * The logo is Trading 212's trademark, used here to identify the broker this
- * addon connects to. The addon is not published by, or affiliated with, them.
+ * The logo is Trading 212's trademark, used here to identify the provider
+ * this addon connects to. The addon is not published by, or affiliated with,
+ * them.
  *
  * Inlined as a data URI rather than shipped as a file because the addon runs in
  * an opaque-origin sandbox: a relative image path has no origin to resolve
- * against, and the packaged zip carries only the manifest, `dist/` and the
- * README. The source PNG is kept at `icon.png` in the repo so it can be
- * refreshed if the branding changes.
+ * against, and the packaged zip carries only the manifest and `dist/`. The
+ * source PNG is kept at `icon.png` in the repo so it can be refreshed if the
+ * branding changes.
  *
  * GENERATED from icon.png — regenerate with `pnpm icon:embed`.
  */

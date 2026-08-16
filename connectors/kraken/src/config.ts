@@ -214,6 +214,20 @@ export const API_SECRET_SECRET_KEY = 'kraken-api-secret';
 /** Addon storage keys. */
 export const LINKED_ACCOUNT_STORAGE_KEY = 'linked-account-id';
 export const ACCOUNT_CURRENCY_STORAGE_KEY = 'account-currency';
+/**
+ * That the price-provider step has been dealt with, and how.
+ *
+ * Held because the step cannot be verified when it is shown. An addon can ask
+ * Wealthfolio for its market-data providers and gets back the built-in
+ * *types* — `YAHOO`, `CUSTOM_SCRAPER` — never a configured custom one; proven
+ * by creating a provider and watching the list not change. Testing it for real
+ * means assigning it to an asset and seeing whether a quote comes back, and
+ * during onboarding there are no assets yet.
+ *
+ * So this records a decision, not a fact. The fact is checked after the first
+ * import, when there is finally something to check it with.
+ */
+export const PROVIDER_STEP_STORAGE_KEY = 'provider-step';
 
 /**
  * Stamped on accounts this connector creates, alongside the Kraken account id.

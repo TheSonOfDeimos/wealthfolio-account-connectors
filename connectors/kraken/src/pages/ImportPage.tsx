@@ -12,6 +12,7 @@ import {
   FIAT_CURRENCIES,
   KRAKEN_LINK,
   LINKED_ACCOUNT_STORAGE_KEY,
+  PROVIDER_STEP_STORAGE_KEY,
   QUOTE_PROVIDER,
 } from '../config';
 import { applyKrakenPricing, readPricing } from '../lib/assets';
@@ -21,8 +22,9 @@ import { displaySymbol, fetchAssets } from '../lib/extract';
 import { resetEverything, runSync } from '../lib/pipeline';
 import type { LogEntry, LogLevel, Progress, SyncMode, SyncResult } from '../lib/pipeline';
 import type { KrakenBalances } from '../lib/types';
+import { BROKER_ICON } from '../lib/broker-icon';
 
-type Step = 'connect' | 'name' | 'confirm' | 'ready';
+type Step = 'connect' | 'name' | 'prices' | 'confirm' | 'ready';
 
 /** What the connection check found, and what step 2 needs to offer. */
 interface Connection {
@@ -54,6 +56,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
   const [unpriced, setUnpriced] = useState<string[]>([]);
   const [offKraken, setOffKraken] = useState<string[]>([]);
   const [pricing, setPricing] = useState<ApplyResult | null>(null);
+  const [providerChoice, setProviderChoice] = useState<'added' | 'yahoo' | null>(null);
 
   const reporter = {
     log: (level: LogLevel, message: string) =>
@@ -80,6 +83,9 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
 
         const savedCurrency = await ctx.api.storage.get(ACCOUNT_CURRENCY_STORAGE_KEY);
         if (savedCurrency) setCurrency(savedCurrency);
+
+        const choice = await ctx.api.storage.get(PROVIDER_STEP_STORAGE_KEY);
+        if (choice === 'added' || choice === 'yahoo') setProviderChoice(choice);
 
         const linkedId = await ctx.api.storage.get(LINKED_ACCOUNT_STORAGE_KEY);
         if (linkedId) {
@@ -153,13 +159,13 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
       const link = await linkOrCreateAccount(ctx, KRAKEN_LINK, { id: 'spot', currency }, name);
       await ctx.api.storage.set(ACCOUNT_CURRENCY_STORAGE_KEY, currency);
       setAccount(link.account);
-      setStep('confirm');
+      setStep(providerChoice ? 'confirm' : 'prices');
     } catch (caught) {
       setError(describe(caught));
     } finally {
       setBusy(false);
     }
-  }, [ctx, name, currency]);
+  }, [ctx, name, currency, providerChoice]);
 
   // ── Steps 3 and 4 ─────────────────────────────────────────────────────────
 
@@ -186,6 +192,20 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
       }
     },
     [ctx, account, currency, refreshPricing],
+  );
+
+  const choosePrices = useCallback(
+    async (choice: 'added' | 'yahoo') => {
+      setProviderChoice(choice);
+      setStep('confirm');
+      try {
+        await ctx.api.storage.set(PROVIDER_STEP_STORAGE_KEY, choice);
+      } catch {
+        // Remembering the choice is a convenience; failing to is not worth
+        // stopping an import over.
+      }
+    },
+    [ctx],
   );
 
   const useKrakenPrices = useCallback(async () => {
@@ -216,6 +236,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
       setPricing(null);
       setUnpriced([]);
       setOffKraken([]);
+      setProviderChoice(null);
       setStep('connect');
     } catch (caught) {
       setError(describe(caught));
@@ -229,7 +250,10 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <header>
-        <h1 className="text-3xl font-bold">Kraken</h1>
+        <div className="flex items-center gap-3">
+          <BrokerMark />
+          <h1 className="text-3xl font-bold">Kraken</h1>
+        </div>
         <p className="text-sm text-muted-foreground mt-1">
           Imports your Kraken history — purchases, deposits, withdrawals and staking rewards —
           keeping every amount in the currency Kraken recorded it in.
@@ -369,9 +393,14 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
         </Panel>
       ) : null}
 
-      {/* ── 3. Import ──────────────────────────────────────────────────── */}
+      {/* ── 3. Prices ──────────────────────────────────────────────────── */}
+      {account && step === 'prices' ? (
+        <ProviderSetup busy={busy} onChoose={choosePrices} />
+      ) : null}
+
+      {/* ── 4. Import ──────────────────────────────────────────────────── */}
       {account && step === 'confirm' ? (
-        <Panel title="3. Import your history">
+        <Panel title="4. Import your history">
           <p className="text-sm text-muted-foreground">
             Reads your whole Kraken history and writes it into {account.name}. Purchases, deposits,
             withdrawals and staking rewards, each keyed by Kraken's own record id so a repeat run
@@ -474,9 +503,118 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
   );
 }
 
+function BrokerMark() {
+  return (
+    <img
+      src={BROKER_ICON}
+      alt="Kraken"
+      width={36}
+      height={36}
+      className="h-9 w-9 shrink-0 rounded-lg"
+    />
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Prices
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Setting up Kraken as the price source, before anything is imported.
+ *
+ * This sits before the import because that is when it is least work: assets
+ * created while the provider exists take their prices from it immediately,
+ * and adding it afterwards needs a rebuild of every daily valuation before the
+ * charts redraw.
+ *
+ * It cannot be verified here. An addon can ask for Wealthfolio's market-data
+ * providers and gets the built-in *types* back, never a configured custom one —
+ * so the only real test is assigning it to an asset and seeing whether a quote
+ * arrives, and no assets exist yet. What this step can do is refuse to be
+ * skipped silently: continuing means either saying the provider is in place, or
+ * choosing Yahoo knowing what that costs. The claim is then checked for real
+ * after the first import.
+ */
+function ProviderSetup({
+  busy,
+  onChoose,
+}: {
+  busy: boolean;
+  onChoose: (choice: 'added' | 'yahoo') => void;
+}) {
+  return (
+    <Panel title="3. Set up Kraken prices">
+      <p className="text-sm text-muted-foreground">
+        Wealthfolio prices crypto through Yahoo, whose symbols are not Kraken's. It has no entry at
+        all for some Kraken coins, and for others it resolves a{' '}
+        <strong>different instrument</strong> and returns a confident, wrong number — its{' '}
+        <code>USDG</code> is $5.45 for a dollar stablecoin, and its <code>CC</code> is CloudCoin,
+        not the Canton Coin you hold, at roughly twice the price.
+      </p>
+      <p className="text-sm text-muted-foreground">
+        Kraken prices every coin it sells, needs no API key, and is the venue your holdings sit on.
+        Adding it now means the import prices correctly from the start; adding it later needs a
+        full rebuild of the valuation history before any chart is right.
+      </p>
+
+      <p className="text-sm">
+        In a second tab: <strong>Settings → Market Data → Custom Providers → Add Provider</strong>,
+        then fill in the provider and <strong>both</strong> sources.
+      </p>
+      <dl className="space-y-2">
+        <CopyField label="Code" value={QUOTE_PROVIDER.id} />
+        <CopyField label="Name" value={QUOTE_PROVIDER.name} />
+      </dl>
+
+      {QUOTE_PROVIDER.sources.map((source) => (
+        <div key={source.kind} className="border-t pt-3 space-y-2">
+          <p className="text-xs font-medium">
+            Source: <strong>{source.kind === 'latest' ? 'Latest price' : 'Historical'}</strong>{' '}
+            <span className="font-normal text-muted-foreground">
+              ({source.format.toUpperCase()})
+              {source.kind === 'historical' ? ' — without this one every chart stays empty' : null}
+            </span>
+          </p>
+          <dl className="space-y-2">
+            <CopyField label="URL" value={source.url} />
+            <CopyField label="Price" value={source.pricePath} />
+            {source.datePath ? <CopyField label="Date" value={source.datePath} /> : null}
+            {source.openPath ? <CopyField label="Open" value={source.openPath} /> : null}
+            {source.highPath ? <CopyField label="High" value={source.highPath} /> : null}
+            {source.lowPath ? <CopyField label="Low" value={source.lowPath} /> : null}
+            {source.volumePath ? <CopyField label="Volume" value={source.volumePath} /> : null}
+          </dl>
+        </div>
+      ))}
+
+      <p className="text-xs text-muted-foreground">
+        Keep every <code>*</code> exactly as shown — Kraken re-keys some pairs, so a request for{' '}
+        <code>XBTUSD</code> comes back under <code>XXBTZUSD</code>, and an exact key would fail on
+        Bitcoin and Ether. The <code>USD</code> in each URL is literal; <code>{'{CURRENCY}'}</code>{' '}
+        would expand to the asset's own currency and ask for pairs that do not exist.
+      </p>
+
+      <Note tone="warn">
+        This addon cannot check whether you have added it — Wealthfolio only tells addons which
+        provider <em>types</em> exist, not which custom ones are configured. It is verified for
+        real straight after the import, and the Prices panel will say so either way.
+      </Note>
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => onChoose('added')} disabled={busy} primary>
+          I've added it — continue
+        </Button>
+        <Button onClick={() => onChoose('yahoo')} disabled={busy}>
+          Continue with Yahoo prices
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Choosing Yahoo imports every holding and transaction correctly — only the prices suffer, and
+        you can add the provider later from the Prices panel.
+      </p>
+    </Panel>
+  );
+}
 
 /**
  * Getting Kraken's own prices onto Kraken's own holdings.
@@ -762,6 +900,7 @@ const LEVEL_STYLE: Record<LogLevel, string> = {
 const STEP_LABELS: { key: Step; label: string }[] = [
   { key: 'connect', label: 'Connect' },
   { key: 'name', label: 'Name account' },
+  { key: 'prices', label: 'Prices' },
   { key: 'confirm', label: 'Import' },
   { key: 'ready', label: 'Keep in sync' },
 ];
