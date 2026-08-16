@@ -18,6 +18,12 @@
 # reach it. Do not publish this on 0.0.0.0 without setting up auth first —
 # see the upstream compose.yml for the OIDC and password-hash options.
 
+# Pinned so the project — and therefore the data volume — does not depend on
+# what this directory happens to be called. Without it Compose names the volume
+# after the folder, and renaming the checkout silently starts you on an empty
+# database while the old one lingers, still holding your imports.
+name: wealthfolio-connectors
+
 services:
   wealthfolio:
     # Pinned to match `minWealthfolioVersion` in manifest.json. Use `latest`
