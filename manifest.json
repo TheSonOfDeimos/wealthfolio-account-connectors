@@ -3,6 +3,7 @@
   "name": "Trading 212 Import",
   "version": "0.1.0",
   "description": "Pulls filled orders from your Trading 212 account and imports them into Wealthfolio as BUY/SELL activities.",
+  "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJUcmFkaW5nIDIxMiI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMwQjNBNTUiLz4KICA8ZyBmaWxsPSIjRkZGRkZGIj4KICAgIDxwYXRoIGQ9Ik04IDI2LjVhNy41IDcuNSAwIDAgMSAxNSAwYzAgMy4yLTEuOCA1LjQtNCA3LjJMMTEuNSA0MUgyM3Y1SDh2LTQuNmw5LjYtNy42YzEuNC0xLjEgMi0yIDItMy4zYTMgMyAwIDAgMC02IDB6Ii8+CiAgICA8cGF0aCBkPSJNMjcgMjQuNSAzMy4yIDE4aDQuM3YyOGgtNS4zVjI1LjJsLTIuNiAyLjJ6Ii8+CiAgICA8cGF0aCBkPSJNNDEgMjYuNWE3LjUgNy41IDAgMCAxIDE1IDBjMCAzLjItMS44IDUuNC00IDcuMkw0NC41IDQxSDU2djVINDF2LTQuNmw5LjYtNy42YzEuNC0xLjEgMi0yIDItMy4zYTMgMyAwIDAgMC02IDB6Ii8+CiAgPC9nPgo8L3N2Zz4=",
   "author": "Lev Kargalov",
   "license": "MIT",
   "main": "dist/addon.js",

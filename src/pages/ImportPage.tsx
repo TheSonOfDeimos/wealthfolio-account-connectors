@@ -220,10 +220,39 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
       );
     });
 
+/**
+ * A "212" badge for the page heading.
+ *
+ * Not Trading 212's own logo: their mark is their trademark and their asset to
+ * distribute, and a copy drawn from memory would be a worse likeness than an
+ * honest reference. This says which broker the page is about without claiming
+ * to be published by them.
+ *
+ * It lives here rather than in the sidebar because the sidebar is host chrome —
+ * Wealthfolio draws that icon itself from a fixed set of Phosphor icons, and an
+ * addon cannot ship one across the sandbox boundary. Inside its own page it can
+ * draw what it likes.
+ */
+function BrokerMark() {
+  return (
+    <svg viewBox="0 0 64 64" role="img" aria-label="Trading 212" className="h-9 w-9 shrink-0">
+      <rect width="64" height="64" rx="14" fill="#0B3A55" />
+      <g fill="#FFFFFF">
+        <path d="M8 26.5a7.5 7.5 0 0 1 15 0c0 3.2-1.8 5.4-4 7.2L11.5 41H23v5H8v-4.6l9.6-7.6c1.4-1.1 2-2 2-3.3a3 3 0 0 0-6 0z" />
+        <path d="M27 24.5 33.2 18h4.3v28h-5.3V25.2l-2.6 2.2z" />
+        <path d="M41 26.5a7.5 7.5 0 0 1 15 0c0 3.2-1.8 5.4-4 7.2L44.5 41H56v5H41v-4.6l9.6-7.6c1.4-1.1 2-2 2-3.3a3 3 0 0 0-6 0z" />
+      </g>
+    </svg>
+  );
+}
+
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <header>
-        <h1 className="text-3xl font-bold">Trading 212</h1>
+        <div className="flex items-center gap-3">
+          <BrokerMark />
+          <h1 className="text-3xl font-bold">Trading 212</h1>
+        </div>
         <p className="text-sm text-muted-foreground mt-1">
           Imports your Trading 212 history — trades, dividends, deposits, interest and charges —
           keeping every amount in the currency Trading 212 recorded it in.
