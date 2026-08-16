@@ -1,7 +1,7 @@
 /**
  * Real-credential extraction smoke test.
  *
- * Fill in `DEV_CREDENTIALS` in src/config.ts, then `pnpm smoke:live`. It drives
+ * Put `T212_API_KEY` and `T212_API_SECRET` in `.env`, then `pnpm smoke:live`. It drives
  * `src/lib/extract.ts` — the same module, the same calls, the same order the
  * addon uses inside Wealthfolio — and prints everything Trading 212 hands back:
  * the ledger with its source ids, every instrument the account has touched,
@@ -23,7 +23,8 @@
 
 import { writeFileSync } from 'node:fs';
 import { T212 } from 't212-sdk';
-import { DEV_CREDENTIALS, HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../src/config';
+import { HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../src/config';
+import { requireCredentials } from './credentials';
 import {
   ALL_STREAMS,
   buildAssetIndex,
@@ -68,11 +69,7 @@ if (unknownStreams.length > 0) {
   process.exit(1);
 }
 
-const { apiKey, apiSecret } = DEV_CREDENTIALS;
-if (!apiKey || !apiSecret) {
-  console.error('Set DEV_CREDENTIALS in src/config.ts first.');
-  process.exit(1);
-}
+const { apiKey, apiSecret } = requireCredentials();
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Extract

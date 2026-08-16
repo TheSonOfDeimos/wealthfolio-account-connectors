@@ -19,13 +19,10 @@
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { T212 } from 't212-sdk';
-import { DEV_CREDENTIALS, EXCHANGE_MIC, T212_ENVIRONMENT } from '../src/config';
+import { EXCHANGE_MIC, T212_ENVIRONMENT } from '../src/config';
+import { requireCredentials } from './credentials';
 
-const { apiKey, apiSecret } = DEV_CREDENTIALS;
-if (!apiKey || !apiSecret) {
-  console.error('Set DEV_CREDENTIALS in src/config.ts first.');
-  process.exit(1);
-}
+const { apiKey, apiSecret } = requireCredentials();
 
 console.log('Fetching the Trading 212 instrument catalogue…');
 const client = new T212({ apiKey, apiSecret, environment: T212_ENVIRONMENT });

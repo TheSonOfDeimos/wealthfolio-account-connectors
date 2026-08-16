@@ -1,30 +1,4 @@
 /**
- * ─────────────────────────────────────────────────────────────────────────────
- *  CREDENTIALS FOR THE NODE SCRIPTS
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * Generate a key pair in the Trading 212 mobile app (Settings → API):
- * https://helpcentre.trading212.com/hc/en-us/articles/14584770928157-Trading-212-API-key
- *
- * **The addon does not read this.** It asks for the key pair in its own form and
- * keeps it in Wealthfolio's keyring, where it survives restarts and reinstalls
- * and is cleared only by *Reset everything*. Seeding the keyring from here used
- * to mean the credentials form never appeared at all, and it compiled a real key
- * pair into `dist/addon.js` in plaintext for anyone who unzipped it.
- *
- * What is left below is for the scripts that run under Node, outside the
- * sandbox, where there is no keyring to read: `pnpm smoke:live` and
- * `pnpm symbols:generate`. Leave it empty unless you are running those.
- *
- * This file IS tracked by git. Keep local edits out of your diffs with:
- *   git update-index --skip-worktree src/config.ts
- */
-export const DEV_CREDENTIALS = {
-  apiKey: 'REDACTED-API-KEY',
-  apiSecret: 'REDACTED-API-SECRET',
-};
-
-/**
  * Which Trading 212 environment to talk to.
  *
  * `live` is your real account. Every call the addon makes is a read (`GET`);

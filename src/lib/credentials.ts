@@ -6,11 +6,11 @@
  * them to each Trading 212 request itself, so the addon never holds them in
  * memory after the moment they are saved.
  *
- * `DEV_CREDENTIALS` in `config.ts` is deliberately not consulted. Seeding the
- * keyring from it meant the credentials form never appeared, and it compiled a
- * real key pair into `dist/addon.js` in plaintext. Those constants are for the
- * Node scripts — `pnpm smoke:live`, `pnpm symbols:generate` — which run outside
- * the sandbox and have no keyring to read.
+ * Nothing is read from the source tree. The key pair used to live in
+ * `config.ts`, which meant the credentials form never appeared and a real pair
+ * was compiled into `dist/addon.js` in plaintext. The Node scripts —
+ * `pnpm smoke:live`, `pnpm symbols:generate` — take theirs from `.env`
+ * instead, since they run outside the sandbox and have no keyring to read.
  */
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { CREDENTIALS_SECRET_KEY } from '../config';
