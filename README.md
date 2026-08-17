@@ -44,8 +44,10 @@ Adding one? See [Writing a connector](#writing-a-connector).
 You need Wealthfolio 3.6.2 or newer.
 
 1. Download the connector's `.zip` from the
-   [latest release](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/releases/latest),
-   or build it yourself:
+   [latest release](https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/releases/latest).
+   One release carries every connector, each zip named with its own version, so
+   both are in the same place — along with the sources at that tag. Or build it
+   yourself:
 
    ```bash
    pnpm install

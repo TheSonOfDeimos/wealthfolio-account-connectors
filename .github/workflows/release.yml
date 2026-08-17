@@ -1,14 +1,22 @@
-# Publish a connector's zip as a GitHub Release when it lands on main.
+# Publish one release carrying every connector, when it lands on main.
 #
-# Releases are cut per connector and keyed to the version in that connector's
-# manifest, so the tag names the thing a user installs: `trading212-v0.1.0`.
+# This used to cut a release per connector, keyed to that connector's manifest
+# version — `trading212-v0.1.0`, `kraken-v0.1.0`. The tag named the thing you
+# installed, which read well and hid the connectors from anyone looking for
+# them: GitHub calls exactly one release "latest", the README points at
+# `/releases/latest`, and that resolved to whichever connector shipped most
+# recently. After Kraken 0.1.0 and Trading 212 0.2.0 went out minutes apart,
+# `/releases/latest` offered the Trading 212 zip and nothing else, so the Kraken
+# connector was published and unreachable by the route the README gives.
 #
-# Every merge runs this, but a release only appears when a connector's version
-# is one that has not been released before. That guard is deliberate: most
-# merges are docs, refactors and fixes to a version already published, and
-# re-releasing an unchanged artifact under a new tag would leave users unable to
-# tell which download is the one they want. To ship, bump `version` in the
-# connector's manifest.json in the same merge.
+# So a release is now the repo, not a connector: one tag, every connector's zip
+# on it, plus the sources. Each connector still carries its own version in its
+# manifest, and that version is in its filename and in the notes — what changed
+# is only where the artifacts land.
+#
+# Versioned from the root `package.json`. A release appears only when that
+# version has not been tagged before, which keeps docs and refactor merges from
+# republishing the same artifacts under a new tag. To ship, bump it.
 name: Release
 
 on:
@@ -27,7 +35,7 @@ permissions:
 
 jobs:
   release:
-    name: Publish changed connectors
+    name: Publish every connector
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -49,47 +57,63 @@ jobs:
       - name: Build every package
         run: pnpm verify
 
-      - name: Publish a release for each connector whose version is new
+      - name: Publish, if this version is new
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          published=0
+
+          version=$(jq -r .version package.json)
+          tag="v${version}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released — nothing to do. Bump version in package.json to ship."
+            exit 0
+          fi
+
+          # Every connector's zip, and a source archive built from the tree
+          # rather than the checkout, so it carries no node_modules or dist.
+          assets=()
+          : > rows.md
 
           for manifest in connectors/*/manifest.json; do
             dir=$(dirname "$manifest")
             name=$(jq -r .name "$manifest")
-            version=$(jq -r .version "$manifest")
-            tag="$(basename "$dir")-v${version}"
+            connector_version=$(jq -r .version "$manifest")
 
-            if gh release view "$tag" >/dev/null 2>&1; then
-              echo "· $name $version already released as $tag — skipping."
-              continue
-            fi
-
-            echo "· Packaging $name $version"
+            echo "· Packaging $name $connector_version"
             ( cd "$dir" && pnpm package )
 
             zip=$(ls "$dir"/*.zip | head -1)
-            if [ ! -f "$zip" ]; then
-              echo "No zip produced for $name" >&2
-              exit 1
-            fi
+            [ -f "$zip" ] || { echo "No zip produced for $name" >&2; exit 1; }
 
-            gh release create "$tag" "$zip" \
-              --title "$name $version" \
-              --notes "$(printf '%s\n' \
-                "Install: **Wealthfolio → Settings → Add-ons → Add-on Manager → +**, then pick \`$(basename "$zip")\`." \
-                "" \
-                "Your API credentials are entered in the addon itself and kept in Wealthfolio's keyring." \
-                "" \
-                "See [$dir/README.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/$dir/README.md) for what this connector imports and what it deliberately does not." \
-                "" \
-                "Licensed under the GNU AGPL v3.")"
-
-            published=$((published + 1))
+            assets+=("$zip")
+            printf '| %s | `%s` | `%s` |\n' \
+              "$name" "$connector_version" "$(basename "$zip")" >> rows.md
           done
 
-          if [ "$published" -eq 0 ]; then
-            echo "No connector version changed; nothing to release."
-          fi
+          [ "${#assets[@]}" -gt 0 ] || { echo "No connectors found" >&2; exit 1; }
+
+          sources="wealthfolio-account-connectors-${version}-sources.zip"
+          git archive --format=zip -o "$sources" HEAD
+          assets+=("$sources")
+
+          {
+            printf 'Install a connector: **Wealthfolio → Settings → Add-ons → Add-on Manager → +**, then pick its zip below.\n\n'
+            printf '| Connector | Version | Download |\n|---|---|---|\n'
+            cat rows.md
+            printf '\n'
+            printf 'Each connector asks for its own API credentials in its setup form and keeps them in Wealthfolio'"'"'s keyring. Trading 212 sends a bearer token the host attaches itself; Kraken signs each request, so it reads its private key back to do so — give it a read-only key.\n\n'
+            printf 'What each connector imports, and what it deliberately does not, is in its own README:\n'
+            for manifest in connectors/*/manifest.json; do
+              dir=$(dirname "$manifest")
+              printf -- '- [%s](https://github.com/%s/blob/main/%s/README.md)\n' \
+                "$(jq -r .name "$manifest")" "${GITHUB_REPOSITORY}" "$dir"
+            done
+            printf '\n`%s` is the full source at this tag, without `node_modules` or build output.\n\n' "$sources"
+            printf 'Licensed under the GNU AGPL v3.\n'
+          } > notes.md
+
+          gh release create "$tag" "${assets[@]}" \
+            --title "Wealthfolio account connectors ${version}" \
+            --notes-file notes.md
