@@ -139,12 +139,12 @@ const PROBES: Probe[] = [
           `needsReview=${stored.needsReview} subtype=${stored.subtype}`,
   },
   {
-    // A staking reward arrives as a quantity of an asset, and Kraken states no
-    // fiat value for it. Zero cost is the only figure that is not invented —
-    // but only if the host actually creates a holding from it rather than
-    // discarding a row whose consideration is nothing.
+    // The fallback shape for a reward Kraken publishes no close for. It does
+    // create a holding — but the position's cost basis comes out `unknown`,
+    // which is what put 263 transactions on the data-health page, so this is
+    // only used when there is no price to be had.
     key: 'zero-cost-buy',
-    question: 'BUY at unitPrice 0 (a staking reward) — does it create a holding?',
+    question: 'BUY at unitPrice 0 — creates a holding, but with what cost basis?',
     row: {
       activityType: 'BUY',
       asset: { symbol: 'SOL', kind: 'CRYPTO', quoteCcy: 'GBP' },
@@ -152,6 +152,28 @@ const PROBES: Probe[] = [
       unitPrice: '0',
       amount: '0',
       currency: 'GBP',
+    },
+    read: (stored) =>
+      stored === undefined
+        ? 'REJECTED'
+        : `stored quantity=${fmt(stored.quantity)} unitPrice=${fmt(stored.unitPrice)}`,
+  },
+  {
+    // The shape staking rewards actually ship as. Income received as units:
+    // it adds the quantity and a cost basis without touching cash, whereas a
+    // priced BUY also deducts money the user never spent. The host rejects it
+    // outright without a value — "Asset-backed income activities require an
+    // amount or FMV per unit" — which is why `prices.ts` exists.
+    key: 'dividend-in-kind',
+    question: 'DIVIDEND/DIVIDEND_IN_KIND with an FMV — units, basis, and no cash spent?',
+    row: {
+      activityType: 'DIVIDEND',
+      subtype: 'DIVIDEND_IN_KIND',
+      asset: { symbol: 'SOL', kind: 'CRYPTO', quoteCcy: 'USD' },
+      quantity: '1.5',
+      unitPrice: '100',
+      amount: '150',
+      currency: 'USD',
     },
     read: (stored) =>
       stored === undefined
@@ -307,8 +329,11 @@ for (const holding of holdings) {
   );
 }
 console.log(
-  '\n    SOL 1.5 present ⇒ a zero-cost BUY is a usable shape for a staking reward.\n' +
-    '    LTC 2.5 present ⇒ TRANSFER_IN works too; cash impact is the deciding difference.',
+  '\n    Cash is the deciding difference between these shapes. Measured on a\n' +
+    '    1,000 balance: a zero-cost BUY leaves 1,000 and `basisStatus: unknown`;\n' +
+    '    a priced BUY leaves 900, spending money the reward never cost; and\n' +
+    '    DIVIDEND_IN_KIND leaves 1,000 with `basisStatus: complete`, which is why\n' +
+    '    rewards ship as that and swaps ship as SELL + BUY rather than transfers.',
 );
 
 if (keep) {

@@ -241,11 +241,17 @@ right, and overwriting one you set by hand would be worse than the problem.
 
 ## Not yet covered
 
-- **The cost of a crypto-for-crypto exchange.** Buying CC with USDG moves two
-  quantities Kraken states exactly, and Kraken gives no fiat value for the
-  swap. Both sides are recorded at zero cost and flagged, so the holdings match
-  the exchange while the cost basis stays honestly unknown. Dropping them
-  instead — the first attempt — left TRX 461 units high and CC 911 low.
+- **The rate you were actually given.** Kraken states no fiat value for a
+  staking reward or a coin-for-coin exchange — not in `Ledgers`, not in
+  `TradesHistory` (a Convert is not a trade), not in `QueryTrades`. Those rows
+  are valued at Kraken's published daily close for the asset instead, which is
+  a real number for a known asset and date but not the rate on your ticket. A
+  swap is written as a sell and a buy priced from the sell's proceeds, so it is
+  cash-neutral; a reward is written as `DIVIDEND`/`DIVIDEND_IN_KIND`, which
+  adds the units and a cost basis without spending money you never spent. Where
+  Kraken publishes no close, the row falls back to zero cost and is flagged.
+  Dropping such rows instead — the first attempt — left TRX 461 units high and
+  CC 911 low.
 - **Prices that resolve to the wrong instrument.** Quoting assets in USD gets
   them all priced, but not all priced correctly: Yahoo's `USDG-USD` quotes about
   $5.45 for a dollar stablecoin, and its `TAO-USD` is plainly not Bittensor. A

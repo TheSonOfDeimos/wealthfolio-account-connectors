@@ -22,7 +22,10 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { mapDataset, summarise } from '../src/lib/mapper';
+import { mapDataset, summarise, symbolsNeedingPrices } from '../src/lib/mapper';
+import { fetchDailyCloses, lookupFrom } from '../src/lib/prices';
+import { requireKrakenCredentials } from '../../../tools/credentials';
+import { createKrakenClient } from '../src/lib/client';
 import type { KrakenDataset } from '../src/lib/extract';
 import { displaySymbol } from '../src/lib/extract';
 
@@ -75,7 +78,29 @@ if (truncated.length > 0) {
   );
 }
 
-const { activities, issues } = mapDataset(dataset, 'pending', { accountCurrency: currency });
+// Rewards and swaps are priced from Kraken's published closes, so the
+// reconciliation has to fetch them too. Without this the tool exercises the
+// unpriced fallback rather than what actually ships — the balances would still
+// come out right, and the cost basis the connector really writes would never
+// be tested at all.
+const needPrices = symbolsNeedingPrices(dataset);
+let priceOn;
+if (needPrices.length > 0) {
+  const { apiKey, apiSecret } = requireKrakenCredentials();
+  const client = createKrakenClient({ apiKey, apiSecret, fetch: globalThis.fetch });
+  const closes = await fetchDailyCloses(client, needPrices);
+  const missing = needPrices.filter((symbol) => !closes.has(symbol));
+  console.log(
+    `\nDaily closes: ${closes.size}/${needPrices.length} asset(s)` +
+      (missing.length > 0 ? ` — none published for ${missing.join(', ')}` : ''),
+  );
+  priceOn = lookupFrom(closes);
+}
+
+const { activities, issues } = mapDataset(dataset, 'pending', {
+  accountCurrency: currency,
+  priceOn,
+});
 
 console.log(`Mapped ${dataset.ledgers.length} ledger rows → ${activities.length} activities.`);
 for (const [type, count] of [...summarise({ activities, issues })].sort((a, b) => b[1] - a[1])) {
