@@ -269,7 +269,7 @@ export function ImportPage({ ctx }: { ctx: AddonContext }) {
         </div>
         <p className="text-sm text-muted-foreground mt-1">
           Imports your Kraken history — purchases, deposits, withdrawals and staking rewards —
-          keeping every amount in the currency Kraken recorded it in.
+          keeping every quantity exactly as Kraken recorded it.
         </p>
       </header>
 

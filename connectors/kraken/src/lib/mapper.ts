@@ -26,14 +26,36 @@
  * | though the SDK type declares none of them.       |                             |
  * | An activity in a crypto currency is accepted     | Fiat-quoted rows only; the  |
  * | silently and then never priced.                  | rest are reported.          |
- * | A BUY at `unitPrice: 0` creates a real holding.  | Rewards can be recorded     |
- * |                                                  | without inventing a value.  |
+ * | A BUY at `unitPrice: 0` creates a real holding,   | Only as a fallback: it is   |
+ * | but leaves its cost basis `unknown`.             | a position with no basis.   |
+ * | `DIVIDEND`/`DIVIDEND_IN_KIND` adds quantity and  | Staking rewards go here.    |
+ * | a cost basis without touching cash; a priced BUY | A priced BUY spends money   |
+ * | deducts cash the user never spent.               | the user never spent.       |
  *
- * The one place this computes rather than copies is a purchase's unit price,
- * `amount / quantity`. Both operands are stated by Kraken on their own ledger
- * rows, and the comment carries them so the arithmetic stays auditable.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  Where a number comes from when Kraken states none
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Two row shapes carry quantities and no money: a staking reward, and a
+ * coin-for-coin exchange. Kraken states no fiat value for either, anywhere —
+ * and Wealthfolio will not give a position a cost basis without one, which is
+ * what left 263 transactions flagged and Unrealized P&L at N/A.
+ *
+ * So those rows are valued at Kraken's published daily close for the asset,
+ * supplied by the caller as `priceOn` (see `prices.ts`). That is a stated
+ * figure for a known asset on a known date — the same series the connector's
+ * own quote provider reads — rather than a guess about what the row was worth.
+ * It is still not the rate Kraken gave you, so every row priced this way says
+ * so in its comment, and when no close exists the row falls back to zero cost
+ * and is flagged. A missing price is recoverable; an invented one is not.
+ *
+ * The one other place this computes rather than copies is a purchase's unit
+ * price, `amount / quantity`. Both operands are stated by Kraken on their own
+ * ledger rows, and the comment carries them so the arithmetic stays auditable.
  */
 import type { AssetInfo, InstantBuy, KrakenDataset } from './extract';
+import { dayOf } from './prices';
+import type { PriceLookup } from './prices';
 import { displaySymbol, groupByRefid, ledgerKind, pairInstantBuys } from './extract';
 import {
   ASSET_NAMES,
@@ -76,6 +98,15 @@ export interface MapResult {
 }
 
 export interface MapOptions {
+  /**
+   * Kraken's published daily close for an asset, when there is one.
+   *
+   * Supplied rather than fetched here so the mapper stays a pure function of
+   * the dataset it is handed, which is what lets the reconciliation tool run
+   * it offline. Absent, or returning `undefined`, every row that needs a price
+   * falls back to being recorded at zero and flagged.
+   */
+  priceOn?: PriceLookup;
   /**
    * The currency the Wealthfolio account is denominated in.
    *
@@ -141,6 +172,38 @@ function decimal(value: number, places = 12): string {
 // ─────────────────────────────────────────────────────────────────────────────
 //  Mapping
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The assets whose daily close the mapper will need.
+ *
+ * Only two row shapes need one — a staking reward, and the coin given up in a
+ * coin-for-coin exchange — so only those assets are looked up rather than the
+ * whole catalogue. One public call each, and none at all for an account that
+ * neither stakes nor swaps.
+ */
+export function symbolsNeedingPrices(dataset: KrakenDataset): string[] {
+  const assets = dataset.assets;
+  const symbolOf = (code: string): string | undefined =>
+    SYMBOL_OVERRIDES[code] ?? displaySymbol(assets, code);
+  const isFiat = (code: string): boolean => {
+    const symbol = symbolOf(code);
+    return symbol !== undefined && FIAT_CURRENCIES.has(symbol);
+  };
+
+  const wanted = new Set<string>();
+  for (const row of dataset.ledgers) {
+    const kind = ledgerKind(row).split('/')[0];
+    if (kind !== 'staking' && kind !== 'earn') continue;
+    const symbol = symbolOf(row.asset);
+    if (symbol && !FIAT_CURRENCIES.has(symbol)) wanted.add(symbol);
+  }
+  for (const buy of pairInstantBuys(dataset.ledgers).buys) {
+    if (isFiat(buy.spent.asset)) continue;
+    const symbol = symbolOf(buy.spent.asset);
+    if (symbol) wanted.add(symbol);
+  }
+  return [...wanted].sort();
+}
 
 export function mapDataset(
   dataset: KrakenDataset,
@@ -359,21 +422,54 @@ export function mapDataset(
           });
           break;
         }
+        const stakingBase =
+          `Kraken staking ${row.refid} · gross ${decimal(amount)} ${symbol}, ` +
+          `fee ${decimal(fee)}, net ${decimal(net)}`;
+        const close = options.priceOn?.(symbol, dayOf(row.time));
+
+        if (close === undefined) {
+          // No published close for this asset on this day, so the reward is
+          // recorded at zero rather than at a number this connector made up.
+          // Wealthfolio will leave the position's cost basis unknown and say
+          // so on its data-health page, which is the honest outcome.
+          activities.push({
+            ...base(row, row.id),
+            activityType: 'BUY',
+            subtype: 'STAKING_REWARD',
+            asset: assetFor(row.asset)!,
+            quantity: decimal(net),
+            unitPrice: '0',
+            amount: '0',
+            currency: options.accountCurrency,
+            comment: `${stakingBase} · Kraken publishes no close for ${symbol} that day, so this is recorded at zero cost`,
+          });
+          issues.push({
+            kind: 'warning',
+            sourceId: row.id,
+            message:
+              `No Kraken close for ${symbol} on ${dayOf(row.time)}, so the reward carries no cost ` +
+              'basis. Wealthfolio will report the position as missing its purchase price.',
+          });
+          break;
+        }
+
+        // Income received as units, not a purchase. Verified against the host:
+        // `DIVIDEND` + `DIVIDEND_IN_KIND` adds the quantity, sets a cost basis
+        // and leaves cash alone, whereas a priced `BUY` also deducts cash the
+        // user never spent — 1,000 became 900 on a reward of 100.
         activities.push({
           ...base(row, row.id),
-          activityType: 'BUY',
-          subtype: 'STAKING_REWARD',
+          activityType: 'DIVIDEND',
+          subtype: 'DIVIDEND_IN_KIND',
           asset: assetFor(row.asset)!,
           quantity: decimal(net),
-          // Zero, because Kraken states no value for a reward and any other
-          // number would be one this connector made up. A verified host
-          // behaviour makes this viable: a BUY at zero still creates a holding.
-          unitPrice: '0',
-          amount: '0',
-          currency: options.accountCurrency,
+          unitPrice: decimal(close),
+          amount: decimal(net * close),
+          currency: CRYPTO_QUOTE_CURRENCY,
           comment:
-            `Kraken staking ${row.refid} · gross ${decimal(amount)} ${symbol}, ` +
-            `fee ${decimal(fee)}, net ${decimal(net)} · no fiat value stated`,
+            `${stakingBase} · valued at Kraken's ${dayOf(row.time)} close of ` +
+            `${decimal(close)} ${CRYPTO_QUOTE_CURRENCY}, which Kraken states for the asset but ` +
+            'not for this row',
         });
         break;
       }
@@ -515,12 +611,11 @@ function mapPurchase(
       };
     }
 
-    const note =
+    const exchanged =
       `Kraken ${buy.refid} · exchanged ${decimal(buy.spent.amount)} ${spentSymbol}` +
       `${buy.spent.fee ? ` + ${decimal(buy.spent.fee)} fee` : ''}` +
       ` for ${decimal(buy.received.amount)} ${receivedSymbol}` +
-      `${buy.received.fee ? ` - ${decimal(buy.received.fee)} fee` : ''}` +
-      ' · Kraken states no fiat value for this exchange, so it is recorded at zero cost';
+      `${buy.received.fee ? ` - ${decimal(buy.received.fee)} fee` : ''}`;
 
     // Two rows, so two keys. An idempotency key has to be unique per activity,
     // and both legs share one Kraken refid.
@@ -529,29 +624,88 @@ function mapPurchase(
     out.idempotencyKey = idempotencyKeyFor(context.accountId, `${buy.refid}:out`);
     into.idempotencyKey = idempotencyKeyFor(context.accountId, `${buy.refid}:in`);
 
+    const disposed = buy.spent.amount + buy.spent.fee;
+    const close = options.priceOn?.(spentSymbol, dayOf(buy.time));
+
+    if (close === undefined || quantity <= 0 || disposed <= 0) {
+      // Unpriceable, so the quantities are recorded and the value is not.
+      // `TRANSFER_OUT`/`TRANSFER_IN` is the wrong shape for this — Wealthfolio
+      // reads a transfer as a move between *accounts* and asks for the other
+      // side ("4 transfers need matching or confirmation") — but a swap that
+      // cannot be valued has no honest cash leg either, so the pair stays,
+      // flagged, until Kraken publishes a close that covers it.
+      const note = `${exchanged} · Kraken states no fiat value for this exchange and publishes no close for ${spentSymbol} that day, so it is recorded at zero cost`;
+      return {
+        activities: [
+          {
+            ...out,
+            activityType: 'TRANSFER_OUT',
+            asset: spentAsset,
+            quantity: decimal(disposed),
+            unitPrice: '0',
+            amount: '0',
+            currency: options.accountCurrency,
+            comment: note,
+            needsReview: true,
+          },
+          {
+            ...into,
+            activityType: 'TRANSFER_IN',
+            asset: assetFor(buy.received.asset),
+            quantity: decimal(quantity),
+            unitPrice: '0',
+            amount: '0',
+            currency: options.accountCurrency,
+            comment: note,
+            needsReview: true,
+          },
+        ],
+        issue: {
+          kind: 'warning',
+          sourceId: buy.refid,
+          message:
+            `${decimal(buy.received.amount)} ${receivedSymbol} was bought with ${spentSymbol}, not ` +
+            'with money, and Kraken publishes no close for it that day. The quantities are exact; ' +
+            'both sides carry a zero cost and are flagged for review.',
+        },
+      };
+    }
+
+    // A swap is a disposal that funds an acquisition, so it is modelled as
+    // one: sell the coin that left at Kraken's close for that day, and buy the
+    // coin that arrived for exactly those proceeds. Pricing the buy from the
+    // proceeds rather than from its own close is what keeps the pair
+    // cash-neutral — two independent closes would leave a cash residue the
+    // account never had. Verified against the host: cash is unchanged, both
+    // positions come out with a cost basis, and the valuation reports
+    // `basisStatus: complete` and `externalFlowSource: NO_FLOW`.
+    const proceeds = disposed * close;
+    const note =
+      `${exchanged} · Kraken states no fiat value for the exchange, so the coin that left is ` +
+      `valued at its ${dayOf(buy.time)} close of ${decimal(close)} ${CRYPTO_QUOTE_CURRENCY} and ` +
+      'the coin that arrived is priced from those proceeds';
+
     return {
       activities: [
         {
           ...out,
-          activityType: 'TRANSFER_OUT',
+          activityType: 'SELL',
           asset: spentAsset,
-          quantity: decimal(buy.spent.amount + buy.spent.fee),
-          unitPrice: '0',
-          amount: '0',
-          currency: options.accountCurrency,
+          quantity: decimal(disposed),
+          unitPrice: decimal(close),
+          amount: decimal(proceeds),
+          currency: CRYPTO_QUOTE_CURRENCY,
           comment: note,
-          needsReview: true,
         },
         {
           ...into,
-          activityType: 'TRANSFER_IN',
+          activityType: 'BUY',
           asset: assetFor(buy.received.asset),
           quantity: decimal(quantity),
-          unitPrice: '0',
-          amount: '0',
-          currency: options.accountCurrency,
+          unitPrice: decimal(proceeds / quantity),
+          amount: decimal(proceeds),
+          currency: CRYPTO_QUOTE_CURRENCY,
           comment: note,
-          needsReview: true,
         },
       ],
       issue: {
@@ -559,8 +713,9 @@ function mapPurchase(
         sourceId: buy.refid,
         message:
           `${decimal(buy.received.amount)} ${receivedSymbol} was bought with ${spentSymbol}, not ` +
-          'with money. The quantities are recorded exactly as Kraken states them, but it gives no ' +
-          'fiat value for the exchange, so both sides carry a zero cost and are flagged for review.',
+          `with money. Kraken states no value for the exchange, so it is valued at the ` +
+          `${dayOf(buy.time)} close of ${spentSymbol} — the quantities are exact, the value is ` +
+          "Kraken's published close rather than the rate you were given.",
       },
     };
   }

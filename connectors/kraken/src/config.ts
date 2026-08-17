@@ -71,9 +71,11 @@ export const MAX_HISTORY_ITEMS = 500;
  * `USDTUSD=X` are 404. Nothing rejects the activity; it is stored and then
  * silently never priced.
  *
- * So a trade quoted in crypto or in a stablecoin cannot be imported honestly,
- * and Kraken states no fiat equivalent for one. Those rows are reported by name
- * rather than written — which on Kraken is a large exclusion, not an edge case.
+ * So an activity may never be *denominated* in a coin. That is not the same as
+ * refusing to import one: a coin-for-coin exchange is written as a sell and a
+ * buy denominated in `CRYPTO_QUOTE_CURRENCY`, valued at Kraken's published
+ * close for the coin that left. What this set forbids is naming a coin as the
+ * currency, which is the thing that gets stored and then silently never priced.
  *
  * ISO 4217 codes as Kraken's display names give them, after the `Z` prefix is
  * resolved through `/0/public/Assets`.

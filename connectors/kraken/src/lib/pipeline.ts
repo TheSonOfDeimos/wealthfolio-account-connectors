@@ -18,7 +18,8 @@ import {
 } from '../config';
 import { checkLedgerContinuity, extractAll } from './extract';
 import type { KrakenDataset } from './extract';
-import { isOurs, keyPrefixFor, mapDataset, summarise } from './mapper';
+import { isOurs, keyPrefixFor, mapDataset, summarise, symbolsNeedingPrices } from './mapper';
+import { fetchDailyCloses, lookupFrom } from './prices';
 import type { MappedActivity, MappingIssue } from './mapper';
 import { createSource, KRAKEN_KEYS } from './source';
 import { reconcileAssetNames } from './assets';
@@ -158,8 +159,36 @@ export async function runSync(
     log('success', 'Ledger reconciles against its own running balance — nothing is missing.');
   }
 
+  // Rewards and coin-for-coin swaps arrive with quantities and no money, and
+  // Wealthfolio will not give a position a cost basis without a price. Kraken
+  // states none per row but publishes a daily close per asset, so those are
+  // fetched for the assets that need one — the same OHLC series the connector's
+  // quote provider reads, so a reward is valued at the number the host will
+  // itself use to value the holding.
+  progress({ phase: 'Kraken', message: 'Fetching daily closes…' });
+  const needPrices = symbolsNeedingPrices(dataset);
+  const closes =
+    needPrices.length > 0
+      ? await fetchDailyCloses(client, needPrices, (symbol, days) =>
+          progress({ phase: 'Kraken', message: `${symbol}: ${days} daily closes…` }),
+        )
+      : new Map();
+  if (needPrices.length > 0) {
+    const missing = needPrices.filter((symbol) => !closes.has(symbol));
+    log(
+      missing.length === 0 ? 'info' : 'warn',
+      missing.length === 0
+        ? `Daily closes fetched for ${closes.size} asset(s).`
+        : `Daily closes fetched for ${closes.size} of ${needPrices.length} asset(s); ` +
+          `Kraken publishes none for ${missing.join(', ')}, whose rows stay at zero cost.`,
+    );
+  }
+
   progress({ phase: 'Mapping', message: 'Translating Kraken records…' });
-  const { activities, issues } = mapDataset(dataset, accountId, { accountCurrency });
+  const { activities, issues } = mapDataset(dataset, accountId, {
+    accountCurrency,
+    priceOn: lookupFrom(closes),
+  });
   log('info', `Mapped ${activities.length} activities.`);
 
   const skipped = issues.filter((issue) => issue.kind === 'skipped');
