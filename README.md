@@ -49,16 +49,25 @@ You need Wealthfolio 3.6.2 or newer.
 
    ```bash
    pnpm install
-   cd connectors/trading212 && pnpm bundle
+   cd connectors/trading212 && pnpm bundle   # or connectors/kraken
    ```
 
 2. In Wealthfolio: **Settings → Add-ons → Add-on Manager → +** and pick the zip.
-3. Open the connector from the sidebar and follow the four steps: paste your API
-   credentials, name the account, confirm the import, then keep it in sync.
+3. Open the connector from the sidebar and follow its steps. Trading 212 has
+   four — paste your API credentials, name the account, import, then keep it in
+   sync. Kraken adds one before the import, to set up a price source for coins
+   Yahoo cannot value correctly.
 
-Your credentials go into Wealthfolio's own keyring. The connector never reads
-them back — the host attaches them to each request itself — and nothing but
-*Reset everything* removes them.
+Your credentials go into Wealthfolio's own keyring, and nothing but *Reset
+everything* removes them. How they are used differs by broker, which is worth
+stating plainly:
+
+- **Trading 212** sends a bearer token, so the host attaches it to each request
+  and the connector never reads it back.
+- **Kraken** signs every request with an HMAC the network broker cannot compute
+  on our behalf, so that connector *does* read the private key back to sign
+  with. Give it a read-only key: Funds · Query, Orders · Query closed orders &
+  trades, and Data · Query ledger entries, and nothing else.
 
 [ci]: https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/actions/workflows/ci.yml
 
@@ -67,6 +76,7 @@ them back — the host attaches them to each request itself — and nothing but
 ```
 connectors/          one directory per provider, each a self-contained addon
   trading212/          manifest, icon, src/, its own tools/ and README
+  kraken/              the same shape, plus request signing and a quote provider
 packages/
   connector-kit/       what every connector needs, and nothing broker-specific
 tools/               dev-deploy and icon embedding, usable from any connector
@@ -77,7 +87,8 @@ docker/              a local Wealthfolio to test against
 The split between a connector and the kit is decided by one question: **would a
 second provider need this?** Sandbox egress, keyring credentials, account
 linking and the asset-currency repair would — so they are in the kit. Anything
-that knows what a Trading 212 order looks like stays in the connector.
+that knows what a Trading 212 order or a Kraken ledger row looks like stays in
+the connector.
 
 ## Working on it
 
@@ -99,7 +110,8 @@ pnpm dev:deploy       # build, zip, install into the running Wealthfolio
 Reload the Wealthfolio tab to pick up the new build. There is more on the Docker
 instance and the inner development loop in
 [connectors/trading212/README.md](connectors/trading212/README.md), including how
-to attach Wealthfolio's own frontend dev server.
+to attach Wealthfolio's own frontend dev server; what Kraken's API does and does
+not state is in [connectors/kraken/README.md](connectors/kraken/README.md).
 
 ## Writing a connector
 

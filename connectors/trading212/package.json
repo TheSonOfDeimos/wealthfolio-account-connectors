@@ -1,6 +1,6 @@
 {
   "name": "@wealthfolio-connectors/trading212",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Imports your Trading 212 history into Wealthfolio — trades, dividends, deposits, interest and charges.",
   "license": "AGPL-3.0-or-later",
