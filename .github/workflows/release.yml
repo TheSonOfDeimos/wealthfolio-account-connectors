@@ -10,9 +10,14 @@
 # connector was published and unreachable by the route the README gives.
 #
 # So a release is now the repo, not a connector: one tag, every connector's zip
-# on it, plus the sources. Each connector still carries its own version in its
-# manifest, and that version is in its filename and in the notes — what changed
-# is only where the artifacts land.
+# on it. Each connector still carries its own version in its manifest, and that
+# version is in its filename and in the notes — what changed is only where the
+# artifacts land.
+#
+# Only the connector zips are uploaded. GitHub already attaches "Source code
+# (zip)" and "(tar.gz)" to every release from the tag, so shipping a third
+# archive of the same tree added a download nobody installing a connector
+# wants, next to the two they do.
 #
 # Versioned from the root `package.json`. A release appears only when that
 # version has not been tagged before, which keeps docs and refactor merges from
@@ -71,8 +76,8 @@ jobs:
             exit 0
           fi
 
-          # Every connector's zip, and a source archive built from the tree
-          # rather than the checkout, so it carries no node_modules or dist.
+          # One zip per connector. Nothing else: GitHub's own source archives
+          # already cover the tree at this tag.
           assets=()
           : > rows.md
 
@@ -94,10 +99,6 @@ jobs:
 
           [ "${#assets[@]}" -gt 0 ] || { echo "No connectors found" >&2; exit 1; }
 
-          sources="wealthfolio-account-connectors-${version}-sources.zip"
-          git archive --format=zip -o "$sources" HEAD
-          assets+=("$sources")
-
           {
             printf 'Install a connector: **Wealthfolio → Settings → Add-ons → Add-on Manager → +**, then pick its zip below.\n\n'
             printf '| Connector | Version | Download |\n|---|---|---|\n'
@@ -110,7 +111,7 @@ jobs:
               printf -- '- [%s](https://github.com/%s/blob/main/%s/README.md)\n' \
                 "$(jq -r .name "$manifest")" "${GITHUB_REPOSITORY}" "$dir"
             done
-            printf '\n`%s` is the full source at this tag, without `node_modules` or build output.\n\n' "$sources"
+            printf '\nThe source at this tag is under **Source code** below.\n\n'
             printf 'Licensed under the GNU AGPL v3.\n'
           } > notes.md
 
