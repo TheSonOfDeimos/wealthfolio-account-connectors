@@ -1,6 +1,7 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { toMajorUnits } from './extract';
 import { SYMBOL_TABLE } from './symbol-table';
+import { QUOTE_OVERRIDES } from './quote-overrides';
 import type { T212Asset, T212Dataset } from './extract';
 
 /**
@@ -310,6 +311,14 @@ export function exchangeMicFor(ticker: string): string | undefined {
 let quoteCurrencies: Map<string, string> | undefined;
 
 export function quoteCurrencyFor(symbol: string, mic: string | undefined): string | undefined {
+  // An instrument priced from another of its currency lines is quoted in that
+  // line's currency, and this has to be true from the moment the asset is
+  // created: Wealthfolio never overwrites a quote row once stored, so a single
+  // price written in the original currency can never be corrected afterwards.
+  // See `quote-overrides.ts` for why, and for how each pairing was checked.
+  const override = QUOTE_OVERRIDES[symbol];
+  if (override) return override.quoteCcy;
+
   if (!quoteCurrencies) {
     const found = new Map<string, string>();
     const conflicted = new Set<string>();

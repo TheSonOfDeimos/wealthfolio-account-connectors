@@ -96,9 +96,10 @@
       "category": "market-data",
       "functions": [
         "searchTicker",
-        "syncHistory"
+        "syncHistory",
+        "sync"
       ],
-      "purpose": "Look up ticker symbols while you correct one, and ask Wealthfolio to fetch prices and exchange rates for the instruments and currencies an import introduces, so a fresh install is not left reporting missing rates."
+      "purpose": "Look up ticker symbols while you correct one, and ask Wealthfolio to fetch prices and exchange rates for the instruments and currencies an import introduces, so a fresh install is not left reporting missing rates. Also refetches a security's full history when its price source changes, so quotes stored in the previous currency are replaced rather than left mixed in."
     },
     {
       "category": "assets",

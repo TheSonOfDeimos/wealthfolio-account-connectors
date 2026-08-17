@@ -1,6 +1,7 @@
 import type { ActivityCreate, AddonContext } from '@wealthfolio/addon-sdk';
 import { CREDENTIALS_SECRET_KEY, HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
 import { reconcileAssetCurrencies } from '@wealthfolio-connectors/connector-kit';
+import { applyQuoteOverrides } from './quote-overrides';
 import { createBrokeredFetch } from '@wealthfolio-connectors/connector-kit';
 import { clearCredentials } from '@wealthfolio-connectors/connector-kit';
 import { buildAssetIndex, createRawGet, extractAll } from './extract';
@@ -283,6 +284,20 @@ export async function runSync(
       log('error', `${fix.symbol}: should be ${fix.now}, not ${fix.was} — ${fix.error}`);
     }
   }
+
+  // A few instruments cannot be priced under the symbol Trading 212 states —
+  // Yahoo carries the ticker but almost no history behind it — and the cash
+  // placeholder cannot be priced at all. Both land on the data-health page as
+  // sync failures, and the first also leaves months of daily returns as
+  // carried-forward approximations. Settled before the market-data sync below,
+  // so that sync fetches the right series the first time.
+  progress({ phase: 'Prices', message: 'Checking where each asset is priced from…' });
+  await applyQuoteOverrides(
+    ctx,
+    accountId,
+    (comment) => activityKeyOf(comment) !== undefined,
+    log,
+  );
 
   // An import introduces instruments and currencies Wealthfolio has never seen,
   // and on a fresh install it has fetched neither their prices nor the exchange
