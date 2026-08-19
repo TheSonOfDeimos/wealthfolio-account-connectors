@@ -36,6 +36,7 @@ prompts you to check the rest.
 | --- | --- | --- | --- |
 | [Trading 212](connectors/trading212) | Broker | **Working** | Trades, dividends, deposits, withdrawals, interest, fees and taxes |
 | [Kraken](connectors/kraken) | Crypto exchange | **Working** | Purchases, deposits, withdrawals, staking rewards and coin-for-coin exchanges |
+| [Crypto.com](connectors/cryptocom) | Crypto exchange | **Working** | Trades, deposits, withdrawals, staking rewards, currency conversions and dust sweeps |
 
 Adding one? See [Writing a connector](#writing-a-connector).
 
@@ -50,14 +51,14 @@ You need Wealthfolio 3.6.2 or newer.
 
    ```bash
    pnpm install
-   cd connectors/trading212 && pnpm bundle   # or connectors/kraken
+   cd connectors/trading212 && pnpm bundle   # or kraken, or cryptocom
    ```
 
 2. In Wealthfolio: **Settings → Add-ons → Add-on Manager → +** and pick the zip.
 3. Open the connector from the sidebar and follow its steps. Trading 212 has
    four — paste your API credentials, name the account, import, then keep it in
-   sync. Kraken adds one before the import, to set up a price source for coins
-   Yahoo cannot value correctly.
+   sync. Kraken and Crypto.com add one before the import, to set up a price
+   source for coins Yahoo cannot value correctly.
 
 Your credentials go into Wealthfolio's own keyring, and nothing but *Reset
 everything* removes them. How they are used differs by broker, which is worth
@@ -69,6 +70,11 @@ stating plainly:
   on our behalf, so that connector *does* read the private key back to sign
   with. Give it a read-only key: Funds · Query, Orders · Query closed orders &
   trades, and Data · Query ledger entries, and nothing else.
+- **Crypto.com** also signs for itself, with the signature inside the request
+  body rather than a header. Same consequence: give it a key with **Can Read**
+  only. Leaving Trading and Withdrawal off is not just prudence — either one
+  forces an IP whitelist that breaks the addon when your address changes.
+  Note this is the **Exchange**, not the mobile app, which has no API at all.
 
 [ci]: https://github.com/TheSonOfDeimos/wealthfolio-account-connectors/actions/workflows/ci.yml
 
@@ -78,6 +84,7 @@ stating plainly:
 connectors/          one directory per provider, each a self-contained addon
   trading212/          manifest, icon, src/, its own tools/ and README
   kraken/              the same shape, plus request signing and a quote provider
+  cryptocom/           the same again, plus an offline mapping reconciliation
 packages/
   connector-kit/       what every connector needs, and nothing broker-specific
 tools/               dev-deploy and icon embedding, usable from any connector
@@ -112,7 +119,9 @@ Reload the Wealthfolio tab to pick up the new build. There is more on the Docker
 instance and the inner development loop in
 [connectors/trading212/README.md](connectors/trading212/README.md), including how
 to attach Wealthfolio's own frontend dev server; what Kraken's API does and does
-not state is in [connectors/kraken/README.md](connectors/kraken/README.md).
+not state is in [connectors/kraken/README.md](connectors/kraken/README.md), and
+what Crypto.com's silently truncates is in
+[connectors/cryptocom/README.md](connectors/cryptocom/README.md).
 
 ## Writing a connector
 
@@ -139,7 +148,10 @@ connector:
   looked 88% correct mapped holdings to the wrong companies, silently.
 - **Check against the running host, not the types.** Both SDKs involved describe
   their backends inaccurately in places — fields declared and never sent, fields
-  sent and never declared. Compiling is not evidence.
+  sent and never declared. Compiling is not evidence, and neither is the
+  provider's documentation: Crypto.com documents a six-month history limit its
+  own API does not apply, and silently truncates every request to seven days
+  instead. Measure it.
 
 ## Contributing
 

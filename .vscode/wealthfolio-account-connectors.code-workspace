@@ -44,10 +44,100 @@
     "version": "2.0.0",
     // Every task is prefixed with what it acts on, because the picker sorts
     // alphabetically and a second connector made bare labels like "Addon:
-    // smoke test" ambiguous. The groups are: Kraken, Trading 212, Wealthfolio
-    // (the Docker instance). Each connector gets the same three: smoke test,
-    // bundle, deploy.
+    // smoke test" ambiguous. The groups are: Crypto.com, Kraken, Trading 212,
+    // Wealthfolio (the Docker instance). Each connector gets the same three:
+    // smoke test, bundle, deploy.
     "tasks": [
+      // ===== Crypto.com =====
+      {
+        // Same chain as the others: clean → type-check → vite build → zip.
+        "label": "Crypto.com: bundle (zip)",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["bundle"],
+        "options": {
+          "cwd": "${workspaceFolder}/connectors/cryptocom"
+        },
+        "group": "build",
+        "problemMatcher": ["$tsc"],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": false
+        }
+      },
+
+      {
+        // Bundles, then installs into the running Wealthfolio container.
+        // Reload the browser tab afterwards to pick it up.
+        "label": "Crypto.com: deploy to Wealthfolio",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["dev:deploy"],
+        "options": {
+          "cwd": "${workspaceFolder}/connectors/cryptocom"
+        },
+        "problemMatcher": ["$tsc"],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": true
+        }
+      },
+
+      {
+        // Replays the mapping against the balances Crypto.com states, without
+        // Wealthfolio or Docker. The sharpest check this connector has: the
+        // smoke test proves the extraction is complete, this proves the
+        // translation is faithful. Pass a saved dump to skip the two-minute
+        // fetch: `pnpm reconcile -- --dataset=out.json`.
+        "label": "Crypto.com: reconcile mapping",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["reconcile"],
+        "options": {
+          "cwd": "${workspaceFolder}/connectors/cryptocom"
+        },
+        "group": "test",
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": true
+        }
+      },
+
+      {
+        // Hits the LIVE Crypto.com Exchange API with the read-only key from
+        // .env. Every call is a query: nothing is traded, staked or withdrawn,
+        // and the statement-export probe only lists requests that already
+        // exist rather than creating one.
+        //
+        // `get-trades` is rate limited to one request per second and the
+        // ledger only answers 7 days per request, so a full backfill is one
+        // request per week of history — about two minutes for 18 months. It
+        // prints progress rather than looking hung. Narrow it while iterating:
+        // `pnpm smoke:live -- --days=30 --streams=balance,transactions`.
+        "label": "Crypto.com: smoke test (live)",
+        "type": "shell",
+        "command": "pnpm",
+        "args": ["smoke:live"],
+        "options": {
+          "cwd": "${workspaceFolder}/connectors/cryptocom"
+        },
+        "group": "test",
+        "problemMatcher": [],
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": true
+        }
+      },
+
       // ===== Trading 212 =====
       {
         // clean → type-check → vite build → zip. The type-check is the reason
@@ -265,6 +355,25 @@
   "launch": {
     "version": "0.2.0",
     "configurations": [
+      {
+        // The cheapest place to debug the Crypto.com connector: the HMAC
+        // signing, the window walk and the per-method rate limiter all run
+        // here exactly as they will in the addon, with no build and no
+        // Wealthfolio involved.
+        //
+        // A short window by default — the point of attaching a debugger is to
+        // watch one request being built, not to wait out a 180-day backfill.
+        "name": "Crypto.com: smoke test (debug)",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder}/connectors/cryptocom/tools/smoke-live.ts",
+        "args": ["--days=30"],
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "sourceMaps": true,
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
       {
         // Breakpoints work in tools/ and src/ — tsx emits source maps and
         // Node maps them back to the TypeScript.

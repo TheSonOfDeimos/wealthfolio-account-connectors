@@ -13,4 +13,6 @@ export type { KeyPairKeys } from './credentials';
 export { findLinkedAccount, linkOrCreateAccount, describeMismatch } from './account';
 export type { BrokerAccount, LinkOptions, LinkResult } from './account';
 export { reconcileAssetCurrencies } from './asset-currency';
+export { pinDefaultProvider, settleCashQuoteMode } from './asset-provider';
+export type { ProviderPin, PinResult } from './asset-provider';
 export type { CurrencyFix, CurrencySource } from './asset-currency';

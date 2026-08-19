@@ -69,6 +69,25 @@ export function requireKrakenCredentials(): { apiKey: string; apiSecret: string 
 }
 
 /**
+ * The Crypto.com Exchange pair, for `pnpm smoke:live` in `connectors/cryptocom`.
+ *
+ * Both halves are plain strings used as they are displayed: the key is sent in
+ * the request body, and the secret is the UTF-8 HMAC key. Neither is base64,
+ * which is the one thing that differs from Kraken and the first thing to check
+ * when every call comes back `UNAUTHORIZED`.
+ */
+export function requireCryptoComCredentials(): { apiKey: string; apiSecret: string } {
+  return readPair(
+    'CRYPTOCOM',
+    'Crypto.com Exchange',
+    'crypto.com/exchange → Manage Account → API Management → Create a new API key.\n' +
+      '  Leave "Enable Trading" and "Enable Withdrawal" OFF: "Can Read" is all this needs,\n' +
+      '  and enabling either forces an IP whitelist that breaks the addon when you move.\n' +
+      '  This is the Exchange, not the mobile app — the app has no API at all.',
+  );
+}
+
+/**
  * Shared lookup. Exits rather than returning empty strings: a script that
  * carries on with no credentials fails later with an auth error that says
  * nothing about the cause.

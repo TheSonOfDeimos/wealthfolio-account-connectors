@@ -5,25 +5,36 @@
  * the account, and a wipe is only ever reached through an explicit
  * confirmation in the UI.
  *
- * Every run is long, mostly spent waiting on Kraken's rate limiter: history
- * endpoints cost 4 against a counter of 20 that decays at 0.5/s, which is one
- * 50-row page every eight seconds sustained. So each stage announces itself.
+ * A full run takes a couple of minutes, and almost all of it is one endpoint:
+ * `get-trades` is limited to one request per second, and the ledger answers
+ * seven days per request however wide a range it is given, so a backfill is one
+ * request per week of history. Eighteen months is about 105 of them. Every
+ * stage announces itself for that reason.
  */
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { clearKeyPair, pinDefaultProvider, settleCashQuoteMode } from '@wealthfolio-connectors/connector-kit';
 import {
   ACCOUNT_CURRENCY_STORAGE_KEY,
+  CRYPTO_QUOTE_CURRENCY,
+  DEFAULT_LOOKBACK_DAYS,
   LINKED_ACCOUNT_STORAGE_KEY,
   QUOTE_PROVIDER,
-  MAX_HISTORY_ITEMS,
 } from '../config';
-import { checkLedgerContinuity, extractAll } from './extract';
-import type { KrakenDataset } from './extract';
-import { isOurs, keyPrefixFor, mapDataset, summarise, symbolsNeedingPrices } from './mapper';
-import { fetchDailyCloses, lookupFrom } from './prices';
+import { extractAll, reconstructBalances, statedBalances } from './extract';
+import type { CryptoComDataset } from './extract';
+import {
+  isOurs,
+  keyPrefixFor,
+  mapDataset,
+  summarise,
+  symbolsNeedingPrices,
+  allCryptoSymbols,
+  underlyingSymbol,
+} from './mapper';
 import type { MappedActivity, MappingIssue } from './mapper';
-import { createSource, KRAKEN_KEYS } from './source';
-import { applyKrakenPricing, readPricing, reconcileAssetNames } from './assets';
+import { fetchDailyCloses, lookupFrom, backfillQuotes } from './prices';
+import { createSource, CRYPTOCOM_KEYS } from './source';
+import { applyCryptoComPricing, readPricing, reconcileAssetNames } from './assets';
 
 export type LogLevel = 'info' | 'success' | 'warn' | 'error';
 
@@ -48,7 +59,7 @@ export interface Reporter {
 export type SyncMode =
   /** First run: walk the whole history. */
   | 'full'
-  /** Routine run: stop as soon as Kraken shows something already held. */
+  /** Routine run: stop as soon as Crypto.com shows something already held. */
   | 'incremental'
   /** Delete everything this connector imported, then re-import. */
   | 'wipe';
@@ -60,7 +71,7 @@ export interface SyncResult {
   deleted: number;
   invalid: number;
   issues: MappingIssue[];
-  dataset: KrakenDataset;
+  dataset: CryptoComDataset;
   counts: Map<string, number>;
 }
 
@@ -85,7 +96,7 @@ export async function runSync(
   const { log, progress } = reporter;
 
   const client = await createSource(ctx);
-  if (!client) throw new Error('No Kraken credentials stored. Connect your account first.');
+  if (!client) throw new Error('No Crypto.com credentials stored. Connect your account first.');
 
   progress({ phase: 'Reading Wealthfolio', message: 'Checking what is already imported…' });
   const existing = await readImportedKeys(ctx, accountId);
@@ -100,16 +111,11 @@ export async function runSync(
   // An incremental walk stops at the first row it already holds. A wipe has
   // just emptied the account, so it walks everything, like a first run.
   //
-  // The stored keys are prefixed (`kraken:LXXXXX`) and the extractor compares
-  // Kraken's own ids, so the prefix comes off here. Getting this wrong is not
-  // a correctness bug — the later de-duplication still drops the rows — but it
-  // silently turns every routine sync back into a full walk, which on Kraken's
-  // rate limiter is minutes rather than seconds.
-  //
-  // Purchases are keyed by their `refid` rather than a ledger id, so they never
-  // match and cannot stop the walk. That costs nothing in practice: rewards are
-  // paid far more often than purchases are made, so the newest row is almost
-  // always one that does match.
+  // The stored keys are prefixed and the extractor compares Crypto.com's own
+  // ids, so the prefix comes off here. Getting this wrong is not a correctness
+  // bug — the later de-duplication still drops the rows — but it silently turns
+  // every routine sync back into a full walk, which is minutes rather than
+  // seconds.
   const prefix = keyPrefixFor(accountId);
   const knownIds =
     mode === 'incremental'
@@ -124,54 +130,80 @@ export async function runSync(
     log('info', 'Nothing imported yet, so this run fetches the whole history.');
   }
 
-  progress({ phase: 'Kraken', message: 'Fetching history…' });
+  progress({ phase: 'Crypto.com', message: 'Fetching history…' });
   const dataset = await extractAll(client, {
-    maxItemsPerStream: bounded ? MAX_HISTORY_ITEMS : Infinity,
+    since: Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
     knownIds,
     onProgress: (event) => {
-      progress({ phase: 'Kraken', message: `${event.stream}: ${event.message}` });
+      progress({ phase: 'Crypto.com', message: `${event.stream}: ${event.message}` });
       log('info', `${event.stream}: ${event.message}`);
     },
   });
 
   for (const stat of dataset.stats) {
-    if (stat.error) log('error', `${stat.stream} failed: ${stat.error}`);
-    else if (stat.skipped) continue;
+    if (stat.error) {
+      // Three streams answer with an error rather than an empty list on an
+      // account that has never used them. Failing a sync over that would fail
+      // most first runs.
+      const optional = stat.stream === 'fiat' || stat.stream === 'staking' || stat.stream === 'export';
+      log(optional ? 'info' : 'error', `${stat.stream}: ${stat.error}`);
+    } else if (stat.skipped) continue;
     else if (stat.truncated) log('warn', `${stat.stream}: stopped at the item limit, more exists.`);
     else log('info', `${stat.stream}: ${stat.items} items in ${(stat.elapsedMs / 1000).toFixed(1)}s.`);
-  }
 
-  // Kraken states its own arithmetic on every ledger row, so a missing row is
-  // detectable rather than invisible. This is the check that caught a
-  // pagination bug losing one row in 315 — worth running on every sync, since
-  // what did arrive looks entirely correct.
-  const gaps = checkLedgerContinuity(dataset.ledgers);
-  const truncated = dataset.stats.some((stat) => stat.stream === 'ledgers' && stat.truncated);
-  if (gaps.length > 0 && !truncated) {
-    log(
-      'error',
-      `The ledger does not follow its own running balance in ${gaps.length} place(s) — rows are ` +
-        'missing from this extraction. The import will be incomplete; please report this.',
-    );
-    for (const gap of gaps.slice(0, 3)) {
-      log('error', `  ${gap.asset}: ${gap.missing.toFixed(8)} unaccounted for around ${gap.id}`);
+    if (stat.saturated) {
+      log(
+        'info',
+        `${stat.stream}: ${stat.saturated} window(s) came back full and were split, so no rows ` +
+          'were lost to the page limit.',
+      );
     }
-  } else if (gaps.length === 0) {
-    log('success', 'Ledger reconciles against its own running balance — nothing is missing.');
   }
 
-  // Rewards and coin-for-coin swaps arrive with quantities and no money, and
-  // Wealthfolio will not give a position a cost basis without a price. Kraken
-  // states none per row but publishes a daily close per asset, so those are
-  // fetched for the assets that need one — the same OHLC series the connector's
+  // ── A failed ledger is fatal, and has to be ────────────────────────────────
+  //
+  // `get-transactions` is the spine: every activity is mapped from it. When it
+  // failed mid-walk with "Failed to fetch" — a transient network error — the
+  // sync carried on regardless, mapped nothing, and reported "Already up to
+  // date". Nothing was wrong with the account; the run had simply lost its only
+  // source and said so in the log while announcing success in the summary.
+  //
+  // Silence about a failure is the one thing a sync must not do, so this stops.
+  // Nothing has been written at this point, so stopping costs only the run.
+  const ledgerFailure = dataset.stats.find((stat) => stat.stream === 'transactions' && stat.error);
+  if (ledgerFailure) {
+    throw new Error(
+      `Could not read your Crypto.com ledger: ${ledgerFailure.error}. Nothing was imported — ` +
+        'the ledger is the source every activity comes from, so a partial read would silently ' +
+        'produce a partial portfolio. Run it again; this is usually a passing network error.',
+    );
+  }
+
+  // Crypto.com states no running balance per row, so the ledger cannot be
+  // checked against itself the way Kraken's can. What it does state is the
+  // closing balance of every asset, and that is a stronger check than it
+  // sounds: on a complete extraction the two agree exactly.
+  reportExtraction(dataset, log);
+
+  // Staking rewards and coin-for-coin trades arrive with quantities and no
+  // money — `transaction_cost` is only the quantity again — and Wealthfolio
+  // will not give a position a cost basis without a price. Crypto.com states
+  // none per row but publishes a daily close per instrument, so those are
+  // fetched for the assets that need one: the same candles the connector's own
   // quote provider reads, so a reward is valued at the number the host will
   // itself use to value the holding.
-  progress({ phase: 'Kraken', message: 'Fetching daily closes…' });
+  progress({ phase: 'Crypto.com', message: 'Fetching daily closes…' });
+  // Two different needs, one fetch. `symbolsNeedingPrices` lists the coins whose
+  // rows cannot be written without a price; `allCryptoSymbols` lists every coin
+  // the account has held, because each one's *chart* wants a daily close that
+  // the quote provider's single un-paged URL cannot reach back far enough to
+  // supply. Fetching the union costs one paged walk per coin either way.
   const needPrices = symbolsNeedingPrices(dataset);
+  const wantHistory = [...new Set([...needPrices, ...allCryptoSymbols(dataset)])].sort();
   const closes =
-    needPrices.length > 0
-      ? await fetchDailyCloses(client, needPrices, (symbol, days) =>
-          progress({ phase: 'Kraken', message: `${symbol}: ${days} daily closes…` }),
+    wantHistory.length > 0
+      ? await fetchDailyCloses(client, wantHistory, dataset.window.since, (symbol, days) =>
+          progress({ phase: 'Crypto.com', message: `${symbol}: ${days} daily closes…` }),
         )
       : new Map();
   if (needPrices.length > 0) {
@@ -181,11 +213,11 @@ export async function runSync(
       missing.length === 0
         ? `Daily closes fetched for ${closes.size} asset(s).`
         : `Daily closes fetched for ${closes.size} of ${needPrices.length} asset(s); ` +
-          `Kraken publishes none for ${missing.join(', ')}, whose rows stay at zero cost.`,
+          `Crypto.com publishes none for ${missing.join(', ')}, whose rows stay at zero cost.`,
     );
   }
 
-  progress({ phase: 'Mapping', message: 'Translating Kraken records…' });
+  progress({ phase: 'Mapping', message: 'Translating Crypto.com records…' });
   const { activities, issues } = mapDataset(dataset, accountId, {
     accountCurrency,
     priceOn: lookupFrom(closes),
@@ -195,7 +227,11 @@ export async function runSync(
   const skipped = issues.filter((issue) => issue.kind === 'skipped');
   const warnings = issues.filter((issue) => issue.kind === 'warning');
   if (skipped.length > 0) {
-    log('warn', `${skipped.length} record(s) left out — Kraken does not state enough to import them.`);
+    log(
+      'warn',
+      `${skipped.length} record(s) left out — either internal moves, or rows Crypto.com does not ` +
+        'state enough about to import.',
+    );
   }
   for (const issue of [...skipped, ...warnings].slice(0, 30)) {
     log(issue.kind === 'skipped' ? 'info' : 'warn', issue.message);
@@ -204,7 +240,7 @@ export async function runSync(
 
   // Dropped here rather than relying on the host's own duplicate detection,
   // which matches on shape and would block a genuine second reward of the same
-  // size on the same day.
+  // size on the same day — and this account receives one almost daily.
   const fresh = activities.filter((row) => !existing.has(row.idempotencyKey));
   const duplicates = activities.length - fresh.length;
   if (duplicates > 0) log('info', `${duplicates} already imported, skipped.`);
@@ -251,7 +287,7 @@ export async function runSync(
         : 'Nothing passed validation, so nothing was written.',
     );
   } else {
-    log('success', 'Already up to date — nothing new on Kraken.');
+    log('success', 'Already up to date — nothing new on Crypto.com.');
   }
 
   // An import introduces assets Wealthfolio has never seen, and on a fresh
@@ -259,8 +295,7 @@ export async function runSync(
   // currencies and yours. Left alone it reports both as data-health problems.
   //
   // Scoped to this account's holdings rather than `syncHistory()`, which
-  // refreshes the whole portfolio and timed out at around two and a half
-  // minutes on twenty assets — twice. A connector has no business refreshing
+  // refreshes the whole portfolio: a connector has no business refreshing
   // securities it did not import, and the unscoped call gets slower with every
   // account a user adds.
   progress({ phase: 'Market data', message: 'Fetching prices…' });
@@ -312,9 +347,6 @@ export async function runSync(
   await ctx.api.portfolio.recalculate();
   await settle(ctx, accountId, progress);
 
-  // Names Wealthfolio took from a market-data provider can belong to a
-  // different coin entirely — Yahoo's `CC` is CloudCoin, not Kraken's Canton
-  // Coin. Only names stated in `ASSET_NAMES` are corrected.
   progress({ phase: 'Assets', message: 'Checking asset names…' });
   await reconcileAssetNames(ctx, accountId, log);
 
@@ -334,16 +366,16 @@ export async function runSync(
   //
   // Skipped entirely when every holding is already on it, so a routine sync
   // pays nothing. Assets another connector claimed are left alone by
-  // `applyKrakenPricing` itself — Wealthfolio shares one asset across accounts.
+  // `applyCryptoComPricing` itself — Wealthfolio shares one asset across accounts.
   try {
     const pricing = await readPricing(ctx, accountId);
-    if (pricing.offKraken.length > 0) {
-      progress({ phase: 'Prices', message: `Pointing ${pricing.offKraken.length} asset(s) at Kraken…` });
-      const applied = await applyKrakenPricing(ctx, accountId, log);
+    if (pricing.offProvider.length > 0) {
+      progress({ phase: 'Prices', message: `Pointing ${pricing.offProvider.length} asset(s) at Crypto.com…` });
+      const applied = await applyCryptoComPricing(ctx, accountId, log);
       if (applied.providerMissing) {
         log(
           'warn',
-          `No Kraken price provider is configured, so these assets keep whatever Yahoo matched — ` +
+          `No Crypto.com price provider is configured, so these assets keep whatever Yahoo matched — ` +
             'which for some coins is a different instrument at a confidently wrong price. Add it ' +
             'under Settings → Market Data, then use the Prices panel below.',
         );
@@ -360,7 +392,7 @@ export async function runSync(
     await pinDefaultProvider(
       ctx,
       accountId,
-      (comment) => Boolean(comment?.startsWith('Kraken')),
+      (comment) => Boolean(comment?.startsWith('Crypto.com')),
       { preferred: 'CUSTOM_SCRAPER', customCode: QUOTE_PROVIDER.id },
       log,
     );
@@ -368,15 +400,52 @@ export async function runSync(
     log('info', `Could not pin a price source on closed positions: ${describeError(error)}`);
   }
 
-
-  // Kraken values the whole account itself, in USD, and that is the only
-  // outside opinion available on whether the prices Wealthfolio found are the
-  // right ones. It matters because pointing crypto assets at USD gets them all
-  // priced but not all priced *correctly* — Yahoo's tickers collide, and a
-  // wrong price is worse than a missing one because nothing looks broken.
+  // Fill in the history the quote provider cannot reach: its single URL returns
+  // 300 daily candles, about ten months, and this connector routinely imports
+  // eighteen.
   //
-  // Reported, never acted on: the two figures are in different currencies and
-  // measured moments apart, so only a large gap means anything.
+  // Both inputs come from what is already in Wealthfolio rather than from the
+  // batch this run fetched. An incremental sync normally returns nothing new,
+  // so `dataset` is empty and `dataset.window.since` is only days old — driving
+  // the backfill from either meant it did nothing on every run but a full
+  // reload, which is how 205 days of this account stayed unpriced.
+  try {
+    const imported = (await ctx.api.activities.getAll(accountId)) as unknown as {
+      comment?: string | null;
+      assetId?: string | null;
+      assetSymbol?: string | null;
+      date?: string | null;
+    }[];
+    const assetIds = new Map<string, string>();
+    let earliest = Date.now();
+    for (const activity of imported) {
+      if (!activity.comment?.startsWith('Crypto.com')) continue;
+      const when = Date.parse(String(activity.date ?? ''));
+      if (Number.isFinite(when) && when < earliest) earliest = when;
+      const symbol = activity.assetSymbol;
+      if (!symbol || !activity.assetId || symbol.startsWith('$CASH')) continue;
+      assetIds.set(symbol, activity.assetId);
+    }
+    await backfillQuotes(
+      ctx,
+      client,
+      assetIds,
+      earliest,
+      `CUSTOM_SCRAPER:${QUOTE_PROVIDER.id}`,
+      log,
+      (symbol) => progress({ phase: 'Prices', message: `${symbol}: filling missing days…` }),
+    );
+  } catch (error) {
+    log('info', `Could not write daily price history: ${describeError(error)}`);
+  }
+
+
+  // Crypto.com values every position itself, in the account's own currency, and
+  // that is the only outside opinion available on whether the prices
+  // Wealthfolio found are the right ones. It matters because pointing crypto
+  // assets at USD gets them all priced but not all priced *correctly* — tickers
+  // collide across venues, and a wrong price is worse than a missing one
+  // because nothing looks broken.
   await reportValuation(ctx, accountId, dataset, log);
 
   const counts = summarise({ activities, issues });
@@ -386,22 +455,75 @@ export async function runSync(
 }
 
 /**
- * Compare the imported portfolio against Kraken's own valuation of it.
+ * Whether the ledger accounts for every unit Crypto.com says you hold.
  *
- * `TradeBalance.eb` is Kraken's combined balance across every asset, converted
- * into one currency — USD by default. Wealthfolio's figure comes from a
- * different price source at a slightly different moment, so they will never
+ * The sharpest check available on this API, and the one that decides whether an
+ * import can be trusted at all. Crypto.com states the closing balance of every
+ * asset, and the ledger states every movement — so on a complete extraction the
+ * second reproduces the first exactly. On a live account all ten holdings did,
+ * to the last decimal.
+ *
+ * A gap means the walk stopped short of the start of history. That is worth
+ * saying plainly, because the resulting import looks entirely correct: the
+ * right assets, plausible quantities, and a cost basis that quietly begins
+ * mid-history.
+ */
+function reportExtraction(dataset: CryptoComDataset, log: Reporter['log']): void {
+  const rebuilt = reconstructBalances(dataset.transactions);
+  const folded = new Map<string, number>();
+  for (const [code, quantity] of rebuilt) {
+    const symbol = underlyingSymbol(code);
+    folded.set(symbol, (folded.get(symbol) ?? 0) + quantity);
+  }
+
+  const off: string[] = [];
+  let checked = 0;
+  for (const [code, stated] of statedBalances(dataset)) {
+    if (stated === 0) continue;
+    checked += 1;
+    const symbol = underlyingSymbol(code);
+    const ours = folded.get(symbol) ?? 0;
+    const relative = Math.abs(stated - ours) / Math.abs(stated);
+    if (Math.abs(stated - ours) > 1e-8 && relative > 1e-9) {
+      off.push(`${symbol} (Crypto.com ${stated}, ledger ${ours.toFixed(8)})`);
+    }
+  }
+
+  if (checked === 0) return;
+  if (off.length === 0) {
+    log('success', `All ${checked} balances reproduce from the ledger — nothing is missing.`);
+    return;
+  }
+  log(
+    'warn',
+    `${off.length} of ${checked} balances do not reproduce from the ledger: ${off
+      .slice(0, 6)
+      .join(', ')}. That is history older than this walk reached, so those holdings will import ` +
+      'with the right units and an incomplete cost basis.',
+  );
+}
+
+/**
+ * Compare the imported portfolio against Crypto.com's own valuation of it.
+ *
+ * `user-balance` states a `market_value` per position, which makes this a
+ * sharper comparison than the Kraken connector's — there the only figure
+ * available was one combined balance. Wealthfolio's number comes from a
+ * different price source at a slightly different moment, so the two will never
  * agree exactly and a small gap is meaningless. A large one is not: it is what
  * a mis-resolved ticker looks like from the outside.
  */
 async function reportValuation(
   ctx: AddonContext,
   accountId: string,
-  dataset: KrakenDataset,
+  dataset: CryptoComDataset,
   log: Reporter['log'],
 ): Promise<void> {
-  const krakenUsd = Number(dataset.tradeBalance?.eb ?? NaN);
-  if (!Number.isFinite(krakenUsd) || krakenUsd === 0) return;
+  const theirs = (dataset.balance?.position_balances ?? []).reduce(
+    (total, position) => total + (Number(position.market_value) || 0),
+    0,
+  );
+  if (!Number.isFinite(theirs) || theirs === 0) return;
 
   try {
     const holdings = await ctx.api.portfolio.getHoldings(accountId);
@@ -417,19 +539,34 @@ async function reportValuation(
       );
     }
 
-    const value = holdings.reduce(
-      (total, holding) => total + (holding.marketValue?.base ?? 0),
-      0,
-    );
+    // ⚠ `marketValue.local`, never `.base`.
+    //
+    // `.base` is the user's *base currency* — GBP on a UK setup — and
+    // Crypto.com states its valuation in the account's settlement currency,
+    // USD. Comparing the two logged "2346 vs 3175" on a perfectly correct
+    // import and called it a gap worth investigating. A check that cries wolf
+    // on every sync is worse than no check, because it teaches you to skip the
+    // one line that would have caught a real problem.
+    //
+    // `.local` is the holding's own currency, and every asset this connector
+    // creates is quoted in CRYPTO_QUOTE_CURRENCY, so the sum is directly
+    // comparable to what Crypto.com states.
+    const settlement = dataset.balance?.instrument_name ?? CRYPTO_QUOTE_CURRENCY;
+    const value = holdings.reduce((total, holding) => total + (holding.marketValue?.local ?? 0), 0);
+    const gap = theirs === 0 ? 0 : Math.abs(value - theirs) / theirs;
+
     log(
-      'info',
-      `Portfolio values at ${value.toFixed(2)} in your base currency; Kraken values the same ` +
-        `account at ${krakenUsd.toFixed(2)} USD. These use different price sources, so only a ` +
-        'large gap is worth investigating — most often a Kraken ticker that resolved to the ' +
-        'wrong instrument.',
+      gap > 0.05 ? 'warn' : 'info',
+      `Portfolio values at ${value.toFixed(2)} ${settlement}; Crypto.com values the same positions ` +
+        `at ${theirs.toFixed(2)} ${settlement} — ${(gap * 100).toFixed(2)}% apart. ` +
+        (gap > 0.05
+          ? 'That is more than price drift between two sources would explain, and usually means a ' +
+            'ticker resolved to the wrong instrument. Check each asset on its Market Data tab.'
+          : 'The two use different price feeds read moments apart, so a small difference is ' +
+            'expected and this one is within it.'),
     );
   } catch (error) {
-    log('info', `Could not compare against Kraken's own valuation: ${describeError(error)}`);
+    log('info', `Could not compare against Crypto.com's own valuation: ${describeError(error)}`);
   }
 }
 
@@ -465,8 +602,8 @@ async function settle(
  * The idempotency keys of activities this connector has already written.
  *
  * Read from the field rather than a comment: the backend accepts and returns
- * `idempotencyKey` and `sourceSystem`, verified by `pnpm probe:host`, even
- * though the SDK type declares neither.
+ * `idempotencyKey` and `sourceSystem` even though the SDK type declares
+ * neither — established against a running host by the Kraken connector.
  */
 export async function readImportedKeys(
   ctx: AddonContext,
@@ -488,7 +625,7 @@ export async function readImportedKeys(
 /**
  * Delete every activity this connector imported into the account.
  *
- * Only rows stamped `sourceSystem: KRAKEN` are touched, so anything you
+ * Only rows stamped `sourceSystem: CRYPTOCOM` are touched, so anything you
  * entered by hand into the same account survives.
  */
 export async function deleteImported(
@@ -544,11 +681,11 @@ export async function resetEverything(
   }
 
   // Credentials go last, so a failure earlier leaves the connector still able
-  // to reach Kraken rather than half-reset and locked out.
+  // to reach Crypto.com rather than half-reset and locked out.
   progress({ phase: 'Resetting', message: 'Clearing the saved API credentials…' });
   try {
-    await clearKeyPair(ctx, KRAKEN_KEYS);
-    log('info', 'API key and private key removed from the keyring.');
+    await clearKeyPair(ctx, CRYPTOCOM_KEYS);
+    log('info', 'API key and secret removed from the keyring.');
   } catch (error) {
     log('warn', `Could not clear the saved credentials: ${describeError(error)}`);
   }

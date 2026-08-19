@@ -1,9 +1,15 @@
 /**
- * Correcting what Wealthfolio recorded about each Kraken asset.
+ * Correcting what Wealthfolio recorded about each Crypto.com asset.
  *
  * Two things it gets wrong on its own, both for the same reason — it resolves a
  * bare crypto ticker through a market-data provider whose symbol space is not
- * Kraken's. The price comes from the wrong instrument, and so does the name.
+ * Crypto.com's. The price comes from the wrong instrument, and so does the name.
+ *
+ * This module is very nearly the Kraken connector's, and deliberately so: the
+ * host behaviours it works around were established there, at some cost, and are
+ * not specific to either venue. It is the strongest candidate in this repo for
+ * lifting into `connector-kit` once a third connector has confirmed the shape —
+ * only `QUOTE_PROVIDER` and `ASSET_NAMES` differ.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  *  What the addon can and cannot do here
@@ -18,7 +24,7 @@
  * whose only egress is `network.request` to declared external hosts. Nor can it
  * ask whether one exists: `market.getProviders()` returns the built-in provider
  * *types* — `YAHOO`, `CUSTOM_SCRAPER` and so on — not the custom providers a
- * user has configured, so `kraken-ticker` never appears there whether or not it
+ * user has configured, so `cryptocom-ticker` never appears there whether or not it
  * is set up.
  *
  * So absence is detected the only way left: assign the provider, ask for a
@@ -33,8 +39,8 @@ export interface PricedAsset {
   assetId: string;
   symbol: string;
   price: number;
-  /** Already reading from the Kraken provider. */
-  onKraken: boolean;
+  /** Already reading from the Crypto.com provider. */
+  onProvider: boolean;
 }
 
 export interface PricingState {
@@ -42,14 +48,14 @@ export interface PricingState {
   /** No price at all — Yahoo has no entry for this coin. */
   unpriced: PricedAsset[];
   /**
-   * Priced by something other than Kraken.
+   * Priced by something other than Crypto.com.
    *
    * Worth offering to change even when a price exists, because the dangerous
    * case is not a missing price but a confident wrong one: Yahoo's tickers
    * collide with other instruments and it will happily quote $5.45 for a dollar
    * stablecoin. Nothing about that looks broken from the outside.
    */
-  offKraken: PricedAsset[];
+  offProvider: PricedAsset[];
 }
 
 /**
@@ -67,42 +73,43 @@ export async function readPricing(ctx: AddonContext, accountId: string): Promise
     const symbol = holding.instrument?.symbol;
     const assetId = holding.instrument?.id ?? holding.id;
     if (!symbol || !assetId) continue;
-    // Kraken prices coins, not cash balances and not currency pairs. Pointing
-    // `$CASH` or `BTCGBP` at it asks for a pair that cannot exist and fills the
-    // host's data-health page with failures that look like a broken provider.
+    // Crypto.com prices coins, not cash balances and not currency pairs.
+    // Pointing `$CASH` or `BTCGBP` at it asks for an instrument that cannot
+    // exist and fills the host's data-health page with failures that look like
+    // a broken provider.
     if (symbol.startsWith('$CASH') || symbol.includes('=')) continue;
 
     // The holding does not carry its data source, so the profile is read for
     // it. Only for securities, and only once per sync, so the cost is small.
-    let onKraken = false;
+    let onProvider = false;
     try {
       const profile = (await ctx.api.assets.getProfile(assetId)) as {
         providerConfig?: { preferred_provider?: string; custom_provider_code?: string } | null;
         instrumentType?: string;
       };
       // Only crypto. An equity, a cash line or an FX pair that happens to sit
-      // in this account is not something Kraken's Ticker can answer for —
-      // pointing one at it asks for `$CASHUSD` or `BTCGBPUSD`, pairs that
-      // cannot exist, and the failures read like a broken provider.
+      // in this account is not something Crypto.com's tickers can answer for —
+      // pointing one at it asks for `$CASH_USD` or `BTCGBP_USD`, instruments
+      // that cannot exist, and the failures read like a broken provider.
       if (profile.instrumentType !== 'CRYPTO') continue;
-      onKraken = isKrakenSource(profile.providerConfig);
+      onProvider = isOurSource(profile.providerConfig);
     } catch {
-      // An unreadable profile is reported as not-on-Kraken, which at worst
+      // An unreadable profile is reported as not-on-Crypto.com, which at worst
       // offers a change that turns out to be a no-op.
     }
 
-    assets.push({ assetId, symbol, price: Number(holding.price ?? 0), onKraken });
+    assets.push({ assetId, symbol, price: Number(holding.price ?? 0), onProvider });
   }
 
   return {
     assets,
     unpriced: assets.filter((asset) => !(asset.price > 0)),
-    offKraken: assets.filter((asset) => !asset.onKraken),
+    offProvider: assets.filter((asset) => !asset.onProvider),
   };
 }
 
 export interface ApplyResult {
-  /** Assets successfully pointed at the Kraken provider. */
+  /** Assets successfully pointed at the Crypto.com provider. */
   assigned: number;
   /** Assets still without a price after the sync. */
   stillUnpriced: string[];
@@ -119,27 +126,29 @@ export interface ApplyResult {
    * Whether a price refresh actually completed.
    *
    * This exists because the first version of this function reported "all
-   * holdings now price from Kraken" after the refresh had been refused for a
+   * holdings now price from Crypto.com" after the refresh had been refused for a
    * missing permission. Every holding did still have a price — the stale one it
    * already had — so the check passed while nothing had happened. A cached
    * price makes success and failure look identical, which is precisely the
    * confident-wrong-answer this connector exists to avoid.
    */
   verified: boolean;
-  /** How many holdings now carry a quote Kraken actually supplied. */
+  /** How many holdings now carry a quote Crypto.com actually supplied. */
   sourced?: number;
   error?: string;
 }
 
 /**
- * Make Kraken the price source for every security in the account.
+ * Make Crypto.com the price source for every security in the account.
  *
- * `providerSymbol` is the asset's own display symbol, which is what the
- * provider's `{SYMBOL}` placeholder expands to — Kraken prices `TAOUSD`,
- * `GRTUSD` and so on, and re-keys a few of them in the response, which is why
- * the provider's JSONPath uses a wildcard rather than an exact key.
+ * The provider's `{SYMBOL}` placeholder expands to the asset's own symbol, so
+ * `CRO` becomes `CRO_USD` — the instrument name Crypto.com actually lists. It
+ * does not re-key pairs in its responses the way Kraken does, so the JSONPaths
+ * need no wildcard to survive; they use one anyway, because a path that does
+ * not care how the venue arranges its array is one less thing to break on a
+ * change nobody announces.
  */
-export async function applyKrakenPricing(
+export async function applyCryptoComPricing(
   ctx: AddonContext,
   accountId: string,
   log: (level: 'info' | 'success' | 'warn' | 'error', message: string) => void,
@@ -157,16 +166,17 @@ export async function applyKrakenPricing(
 
       // ── Do not fight another connector over a shared asset ──────────────
       //
-      // Wealthfolio's assets are global, not per-account: a Kraken account and
-      // a Crypto.com account holding BTC share one asset record and one price
-      // source. Without this, each connector's sync reassigns the shared coins
-      // to its own provider and the next sync of the other one takes them
-      // back — observed live, with BTC, ETH and SOL changing hands between
-      // `crypto-com-ticker` and `kraken-ticker` on alternate runs.
+      // Wealthfolio's assets are global, not per-account: if a Kraken account
+      // and a Crypto.com account both hold BTC, they share one asset record
+      // and one price source. Reassigning it here would flip Kraken's BTC to
+      // this provider, and Kraken's next sync would flip it straight back —
+      // the two connectors quietly overwriting each other on every run, with
+      // whichever synced last deciding where the price came from.
       //
       // Neither is wrong about BTC, which is what makes it insidious: nothing
       // looks broken while the source oscillates. So the first connector to
-      // claim an asset keeps it.
+      // claim an asset keeps it. Only assets on the default provider, or
+      // already on ours, are touched.
       const existing = (profile as { providerConfig?: { custom_provider_code?: string } | null })
         .providerConfig?.custom_provider_code;
       if (existing && existing !== QUOTE_PROVIDER.id) {
@@ -229,13 +239,13 @@ export async function applyKrakenPricing(
   // keeps that cached quote whether or not the new provider exists, so
   // "everything has a price" is true either way. `Quote.dataSource` is the only
   // positive signal available, and it is what this waits for.
-  const sourced = await settle(3000, 12, () => countKrakenQuotes(ctx, before.assets));
+  const sourced = await settle(3000, 12, () => countOurQuotes(ctx, before.assets));
   const after = await readPricing(ctx, accountId);
 
   return {
     assigned,
     stillUnpriced: after.unpriced.map((asset) => asset.symbol),
-    // Nothing carries a Kraken quote after a completed refresh: the provider
+    // Nothing carries a Crypto.com quote after a completed refresh: the provider
     // that was supposed to supply them is not configured.
     providerMissing: assigned > 0 && sourced === 0,
     verified: sourced > 0,
@@ -243,8 +253,8 @@ export async function applyKrakenPricing(
   };
 }
 
-/** How many of these assets have a latest quote that came from Kraken. */
-async function countKrakenQuotes(
+/** How many of these assets have a latest quote that came from Crypto.com. */
+async function countOurQuotes(
   ctx: AddonContext,
   assets: readonly PricedAsset[],
 ): Promise<number> {
@@ -260,7 +270,7 @@ async function countKrakenQuotes(
       for (const quote of history) {
         if (!latest || quote.timestamp > latest.timestamp) latest = quote;
       }
-      if (isKrakenQuote(latest?.dataSource)) sourced += 1;
+      if (isOurQuote(latest?.dataSource)) sourced += 1;
     } catch {
       // A quote history we cannot read counts as no evidence, not as failure.
     }
@@ -288,7 +298,7 @@ async function settle(
  *
  * `asset.name` is honoured when an asset is created and ignored afterwards, so
  * anything imported before a name was known keeps whatever the market-data
- * provider matched. Yahoo called Kraken's `CC` "CloudCoin USD" — a different
+ * provider matched. Yahoo called Crypto.com's `CC` "CloudCoin USD" — a different
  * coin, at roughly twice the price.
  *
  * Only names listed in `ASSET_NAMES` are touched. A stored name is never
@@ -321,7 +331,7 @@ export async function reconcileAssetNames(
 }
 
 /** Whether an asset's stored provider config names this connector's provider. */
-function isKrakenSource(
+function isOurSource(
   config: { preferred_provider?: string; custom_provider_code?: string } | null | undefined,
 ): boolean {
   return config?.custom_provider_code === QUOTE_PROVIDER.id;
@@ -331,12 +341,13 @@ function isKrakenSource(
  * Whether a stored quote came from this connector's provider.
  *
  * A custom provider's quotes are namespaced by the provider *type* that ran
- * them: the source recorded against a Kraken quote is
- * `CUSTOM_SCRAPER:kraken-ticker`, not `kraken-ticker`. Comparing for equality
- * matched nothing, so a provider that was working perfectly was reported as
- * missing — and the panel told the user to create one that already existed.
+ * them: the source recorded against one of these is
+ * `CUSTOM_SCRAPER:cryptocom-ticker`, not `cryptocom-ticker`. Comparing for
+ * equality matched nothing on the Kraken connector, so a provider that was
+ * working perfectly was reported as missing — and the panel told the user to
+ * create one that already existed.
  */
-function isKrakenQuote(dataSource: string | undefined): boolean {
+function isOurQuote(dataSource: string | undefined): boolean {
   if (!dataSource) return false;
   return dataSource === QUOTE_PROVIDER.id || dataSource.endsWith(`:${QUOTE_PROVIDER.id}`);
 }

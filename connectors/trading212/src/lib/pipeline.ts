@@ -1,6 +1,6 @@
 import type { ActivityCreate, AddonContext } from '@wealthfolio/addon-sdk';
 import { CREDENTIALS_SECRET_KEY, HISTORY_PAGE_LIMIT, MAX_HISTORY_ITEMS, T212_ENVIRONMENT } from '../config';
-import { reconcileAssetCurrencies } from '@wealthfolio-connectors/connector-kit';
+import { pinDefaultProvider, reconcileAssetCurrencies, settleCashQuoteMode } from '@wealthfolio-connectors/connector-kit';
 import { applyQuoteOverrides } from './quote-overrides';
 import { createBrokeredFetch } from '@wealthfolio-connectors/connector-kit';
 import { clearCredentials } from '@wealthfolio-connectors/connector-kit';
@@ -268,6 +268,23 @@ export async function runSync(
   // before anything is revalued — otherwise the wrong unit is baked into every
   // snapshot the recalculation writes.
   progress({ phase: 'Currencies', message: 'Checking what each asset is priced in…' });
+  // Name Yahoo as the price source for everything this connector imported.
+  //
+  // Yahoo is where these prices already come from, so this changes nothing
+  // about the numbers — it changes who Wealthfolio is allowed to ask. An asset
+  // with no stated provider falls through to every enabled one, and on an
+  // install that also has the Kraken connector that meant a crypto exchange
+  // being asked to price London ETPs: "Kraken Ticker: Could not extract price
+  // ... for symbol '3LGO'". Five closed Trading 212 positions, five errors, all
+  // attributed to the wrong connector.
+  await pinDefaultProvider(
+    ctx,
+    accountId,
+    (comment) => activityKeyOf(comment) !== undefined,
+    { preferred: 'YAHOO' },
+    log,
+  );
+
   const currencyFixes = await reconcileAssetCurrencies(
     ctx,
     accountId,
@@ -311,6 +328,14 @@ export async function runSync(
     log('success', 'Prices and exchange rates refreshed.');
   } catch (error) {
     log('warn', `Could not refresh market data: ${describeError(error)}`);
+  }
+
+
+  // Cash carries no market price; see `settleCashQuoteMode`.
+  try {
+    await settleCashQuoteMode(ctx, accountId, log);
+  } catch (error) {
+    log('info', `Could not settle the cash asset: ${describeError(error)}`);
   }
 
   progress({ phase: 'Recalculating', message: 'Asking Wealthfolio to revalue the portfolio…' });

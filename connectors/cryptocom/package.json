@@ -1,8 +1,8 @@
 {
-  "name": "@wealthfolio-connectors/kraken",
-  "version": "0.1.1",
+  "name": "@wealthfolio-connectors/cryptocom",
+  "version": "0.1.0",
   "private": true,
-  "description": "Imports your Kraken history into Wealthfolio — trades, deposits, withdrawals, staking rewards and fees.",
+  "description": "Imports your Crypto.com Exchange history into Wealthfolio \u2014 trades, deposits, withdrawals, staking rewards and fees.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
@@ -10,13 +10,13 @@
     "type-check": "tsc --noEmit",
     "verify": "pnpm type-check && pnpm build",
     "clean": "rm -rf dist *.zip",
-    "package": "zip -r kraken-import-$npm_package_version.zip manifest.json dist/ -x '*.map'",
+    "package": "zip -r cryptocom-import-$npm_package_version.zip manifest.json dist/ -x '*.map'",
     "bundle": "pnpm clean && pnpm verify && pnpm package",
     "dev:deploy": "tsx ../../tools/dev-deploy.ts",
     "icon:embed": "tsx ../../tools/embed-icon.ts",
     "smoke:live": "tsx tools/smoke-live.ts",
-    "probe:host": "tsx tools/probe-host.ts",
-    "reconcile": "tsx tools/reconcile-docker.ts"
+    "reconcile": "tsx tools/reconcile.ts",
+    "probe:host": "tsx tools/probe-transfer-shape.ts"
   },
   "dependencies": {
     "@wealthfolio-connectors/connector-kit": "workspace:*"

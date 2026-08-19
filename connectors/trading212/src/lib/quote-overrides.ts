@@ -81,6 +81,13 @@ export interface OverrideFix {
   symbol: string;
   applied: boolean;
   detail: string;
+  /**
+   * Set when the attempt actually failed, as opposed to being unnecessary.
+   * Without it both collapse into `applied: false` and get logged the same
+   * way — which is how a flat permission denial on `updateQuoteMode` sat in
+   * the run log looking like "nothing to do" instead of an error.
+   */
+  failed?: boolean;
 }
 
 /**
@@ -166,6 +173,7 @@ export async function applyQuoteOverrides(
         symbol,
         applied: false,
         detail: `could not set a price source: ${describe(error)}`,
+        failed: true,
       });
     }
   }
@@ -179,7 +187,11 @@ export async function applyQuoteOverrides(
       if (profile.quoteMode === 'MANUAL') {
         fixes.push({ symbol: '$CASH', applied: false, detail: 'already off automatic updates' });
       } else {
-        await ctx.api.assets.updateProfile({ ...profile, quoteMode: 'MANUAL' } as never);
+        // Deliberately not `updateProfile`: `UpdateAssetProfile` lists
+        // `quoteMode`, but the handler behind it ignores the field and returns
+        // 200, so this silently did nothing for as long as it has existed.
+        // `updateQuoteMode` is the host function that writes the column.
+        await ctx.api.assets.updateQuoteMode(cashAssetId, 'MANUAL');
         fixes.push({
           symbol: '$CASH',
           applied: true,
@@ -191,12 +203,13 @@ export async function applyQuoteOverrides(
         symbol: '$CASH',
         applied: false,
         detail: `could not stop price updates: ${describe(error)}`,
+        failed: true,
       });
     }
   }
 
   for (const fix of fixes) {
-    log(fix.applied ? 'success' : 'info', `${fix.symbol}: ${fix.detail}`);
+    log(fix.failed ? 'error' : fix.applied ? 'success' : 'info', `${fix.symbol}: ${fix.detail}`);
   }
 
   // Changing where an asset is priced from also changes what currency it is

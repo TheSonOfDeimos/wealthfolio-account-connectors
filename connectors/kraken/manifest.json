@@ -1,7 +1,7 @@
 {
   "id": "kraken-import",
   "name": "Kraken Import",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reads your Kraken history — purchases, deposits, withdrawals and staking rewards — and imports it into Wealthfolio.",
   "author": "Lev Kargalov",
   "license": "AGPL-3.0-or-later",
@@ -103,9 +103,10 @@
       "category": "assets",
       "functions": [
         "getProfile",
-        "updateProfile"
+        "updateProfile",
+        "updateQuoteMode"
       ],
-      "purpose": "Read the currency Wealthfolio assigned to each imported asset and correct it when it disagrees with the one Kraken states."
+      "purpose": "Read the currency Wealthfolio assigned to each imported asset and correct it when it disagrees with the one Kraken states. Also set the quote mode of the `$CASH` placeholder to MANUAL: every row pointing at it is a cash flow — interest, fees, deposits — never a trade, so there is no instrument to price, and leaving it on automatic updates makes every enabled provider fail on a ticker that cannot exist."
     },
     {
       "category": "quotes",

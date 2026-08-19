@@ -89,8 +89,11 @@ jobs:
             echo "· Packaging $name $connector_version"
             ( cd "$dir" && pnpm package )
 
-            zip=$(ls "$dir"/*.zip | head -1)
-            [ -f "$zip" ] || { echo "No zip produced for $name" >&2; exit 1; }
+            # Name the file rather than globbing. `ls | head -1` picks the
+            # alphabetically first zip, which on a tree that already holds a
+            # previous build is the *older* version — a silently wrong upload.
+            zip="$dir/$(jq -r .id "$manifest")-${connector_version}.zip"
+            [ -f "$zip" ] || { echo "No zip produced for $name at $zip" >&2; exit 1; }
 
             assets+=("$zip")
             printf '| %s | `%s` | `%s` |\n' \
@@ -104,7 +107,8 @@ jobs:
             printf '| Connector | Version | Download |\n|---|---|---|\n'
             cat rows.md
             printf '\n'
-            printf 'Each connector asks for its own API credentials in its setup form and keeps them in Wealthfolio'"'"'s keyring. Trading 212 sends a bearer token the host attaches itself; Kraken signs each request, so it reads its private key back to do so — give it a read-only key.\n\n'
+            printf 'Each connector asks for its own API credentials in its setup form and keeps them in Wealthfolio'"'"'s keyring. Trading 212 sends a bearer token the host attaches itself. Kraken and Crypto.com sign each request, so they read their key back to do so — give both a read-only key.\n\n'
+            printf 'Kraken and Crypto.com also need a custom price provider, which their setup walks you through: a crypto ticker that collides with an unrelated symbol on a general feed is priced confidently and wrongly, which looks like nothing is broken.\n\n'
             printf 'What each connector imports, and what it deliberately does not, is in its own README:\n'
             for manifest in connectors/*/manifest.json; do
               dir=$(dirname "$manifest")
